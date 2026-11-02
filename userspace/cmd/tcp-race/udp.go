@@ -13,8 +13,6 @@ import (
 	"strconv"
 	"sync"
 	"time"
-
-	"buaa-net-boost/internal/race"
 )
 
 // SOCKS5 UDP ASSOCIATE. The TCP connection carries only the association
@@ -92,7 +90,7 @@ func (p *proxy) handleUDPAssociate(client *net.TCPConn, br *bufio.Reader) {
 		if err != nil || off >= n {
 			continue
 		}
-		ip, err := race.ResolveIP(host, p.family)
+		ip, err := p.resolve(host)
 		if err != nil {
 			log.Printf("[udp] resolve %s: %v", host, err)
 			continue

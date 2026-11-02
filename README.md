@@ -22,6 +22,7 @@
 | `docs/udp-race.md` | UDP 竞速中继用法与实测 |
 | `docs/ebpf-vs-tun.md` | eBPF / TUN / LD_PRELOAD 方案对比 |
 | `docs/benchmark.md` | 方案一实测：延迟、100MB 带宽、CPU/RSS、额外包量 |
+| `docs/browser-benchmark.md` | 浏览器 LCP/TTFB、上传、DNS AAAA、QUIC/Hysteria2、IPv4 多路径 |
 | `synspray/` | 同 5 元组 SYN 复读的独立验证工具与测量数据 |
 
 ## 快速开始
@@ -90,6 +91,12 @@ connect：直连每轮卡 5.23s，代理上游 connect 只有几十毫秒。扣�
 直连约 7.0/11.0 MB/s、代理约 6.1/13.9 MB/s，两组有重叠；代理的稳定收益在
 connect 长尾，不是物理带宽。完整方法和开销见
 [`docs/benchmark.md`](docs/benchmark.md)。
+
+浏览器实测（Chrome，2 轮）：DeepSeek LCP 1700→516ms，Comate 582→340ms，
+USTC/百度/Bing 基本持平；100MB 上传 15.1→11.1 MB/s，CPU 接近 0。DeepSeek
+的卡顿根因是 AAAA 在 UDP 53 被过滤（DoH 正常），代理的并发 A/AAAA + 缓存
+把它消掉；QUIC/Hysteria2、上传、IPv4 多路径的结论见
+[`docs/browser-benchmark.md`](docs/browser-benchmark.md)。
 
 ## 核心结论
 

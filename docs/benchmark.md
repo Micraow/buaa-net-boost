@@ -79,6 +79,18 @@ connect 的差距算进 MB/s。
 TLS/HTTP（端到端，不在代理里）。helper 的 `AF_PACKET` 只通过 BPF 过滤
 IPv6/TCP/SYN，不解析数据包，所以传输期间几乎不占 CPU。
 
+## 上传（100MB，Cloudflare `__up`，IPv6）
+
+| 方式 | 吞吐 | 总时间 | 代理 CPU | RSS |
+|---|---:|---:|---:|---:|
+| 直连 | 15.1 MB/s | 6.95s | — | — |
+| 代理 | 11.1 MB/s | 9.43s | ≈0（<10ms ticks） | 17.46MB → 17.47MB |
+
+上传方向代理慢约 26%，CPU 仍接近 0；说明不是 CPU 瓶颈，而是多了一跳
+用户态代理/两个 TCP socket 的路径，单次测量也包含网络波动。下载方向此前
+没有明显回退。浏览器/上传/DNS/QUIC 的完整结论见
+[`browser-benchmark.md`](browser-benchmark.md)。
+
 ## UDP（SOCKS5 UDP ASSOCIATE，DNS 查询）
 
 客户端每次用新的 UDP 源端口，因此每次都是一个新 flow；代理首包发 16 份，

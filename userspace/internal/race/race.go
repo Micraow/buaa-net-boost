@@ -249,11 +249,12 @@ func (r *Racer) attempt(ctx context.Context, ip string, port, base int) (*net.TC
 					ch <- attemptResult{lport: lport, err: fmt.Errorf("panic: %v", r)}
 				}
 			}()
+			isV6 := net.ParseIP(ip).To4() == nil
 			network := "tcp4"
-			if r.cfg.Family == 6 {
+			if isV6 {
 				network = "tcp6"
 			}
-			if r.cfg.Sprayer != nil && r.cfg.SprayCopies > 0 {
+			if isV6 && r.cfg.Sprayer != nil && r.cfg.SprayCopies > 0 {
 				if err := r.cfg.Sprayer.Register(ip, port, lport); err != nil {
 					r.log("[spray] port %d: %v", lport, err)
 				}
@@ -370,4 +371,92 @@ func (r *Racer) ReleasePort(port int) {
 func CloseRST(c *net.TCPConn) {
 	_ = c.SetLinger(0)
 	_ = c.Close()
+}
+
+// ResolveFast prefers a real IPv6 address but does not let a broken AAAA
+// query block IPv4. A and AAAA are queried concurrently; AAAA gets a short
+// budget and a short grace period before falling back to A.
+func ResolveFast(ctx context.Context, host string, family int) (string, error) {
+	if ip := net.ParseIP(host); ip != nil {
+		if family == 6 && ip.To4() == nil {
+			return ip.String(), nil
+		}
+		if v4 := ip.To4(); v4 != nil {
+			return v4.String(), nil
+		}
+		return "", fmt.Errorf("%s 没有 IPv%d 地址", host, family)
+	}
+	if family == 4 {
+		c, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+		defer cancel()
+		ips, err := net.DefaultResolver.LookupNetIP(c, "ip4", host)
+		if err != nil || len(ips) == 0 {
+			if err == nil {
+				err = fmt.Errorf("%s 没有 IPv4 地址", host)
+			}
+			return "", err
+		}
+		return ips[0].String(), nil
+	}
+
+	type result struct {
+		ip  string
+		v6  bool
+		err error
+	}
+	ch := make(chan result, 2)
+	go func() {
+		c, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		defer cancel()
+		ips, err := net.DefaultResolver.LookupNetIP(c, "ip6", host)
+		for _, ip := range ips {
+			if ip.Is6() && !ip.Is4In6() {
+				ch <- result{ip: ip.String(), v6: true}
+				return
+			}
+		}
+		ch <- result{v6: true, err: err}
+	}()
+	go func() {
+		c, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+		defer cancel()
+		ips, err := net.DefaultResolver.LookupNetIP(c, "ip4", host)
+		if len(ips) > 0 {
+			ch <- result{ip: ips[0].String()}
+			return
+		}
+		ch <- result{err: err}
+	}()
+
+	var v4 *result
+	var lastErr error
+	grace := time.NewTimer(150 * time.Millisecond)
+	defer grace.Stop()
+	for i := 0; i < 2; i++ {
+		select {
+		case r := <-ch:
+			if r.err == nil && r.ip != "" {
+				if r.v6 {
+					return r.ip, nil
+				}
+				rr := r
+				v4 = &rr
+				continue
+			}
+			if r.err != nil {
+				lastErr = r.err
+			}
+		case <-grace.C:
+			if v4 != nil {
+				return v4.ip, nil
+			}
+		}
+	}
+	if v4 != nil {
+		return v4.ip, nil
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("%s 没有地址", host)
+	}
+	return "", lastErr
 }

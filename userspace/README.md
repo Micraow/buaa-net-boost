@@ -46,6 +46,7 @@ userspace/bin/tcp-race \
 - `--n 2`：两条候选 5 元组（不同源端口）并发；
 - `--spray 8`：每条路径 8 份 SYN，20ms 间隔；总共 16 个 SYN，第一条 SYN-ACK 胜出，另一条 RST 关闭；
 - `--timeout 3s`：如果 16 份都没赶上，留给内核 1s/2s 重传兜底；
+- `--family 6`：优先 IPv6；没有 AAAA 或 IPv6 连接失败时回退 IPv4。A/AAAA 并发查询，AAAA 只等 500ms + 150ms 宽限；DNS 结果缓存 30 秒，避免 DeepSeek 这类 AAAA 超时把页面卡 6 秒；
 - `--no-bind`：代理本身不绑网卡；如果代理有 `CAP_NET_RAW`，可以去掉，让 TCP socket 也绑 `wlan0`；
 - UDP 默认 `--udp-copies 16 --udp-interval 20ms`，只在每条新流的第一个数据报上连发。
 
@@ -109,6 +110,25 @@ connect 后直连约 7.0/11.0 MB/s，代理约 6.1/13.9 MB/s，两组有重叠�
 `splice`，CPU 开销主要来自每连接的 TLS/HTTP 端到端（不在代理里）。
 详细方法和原始输出见 [`../docs/benchmark.md`](../docs/benchmark.md)。
 
+### 浏览器 / 上传 / DeepSeek
+
+Chrome（Playwright headless）每站直连/代理各 2 轮：
+
+| 站点 | 直连 LCP | 代理 LCP | 直连 TTFB | 代理 TTFB |
+|---|---:|---:|---:|---:|
+| USTC 镜像 | 348ms | 368ms | 89ms | 86ms |
+| 百度 | 212ms | 204ms | 75ms | 78ms |
+| Comate | 582ms | **340ms** | 27ms | 33ms |
+| DeepSeek | **1700ms** | **516ms** | **1404ms** | **195ms** |
+| Bing | 364ms | 386ms | 134ms | 158ms |
+
+DeepSeek 的卡顿来自 AAAA：UDP 53 对 `chat.deepseek.com` 的 AAAA 被
+Tencent/阿里/校园/114/Google 返回 SERVFAIL 或超时，DoH 走 443 却 53ms 返回
+NODATA；域名本身 AAAA CNAME 目标也没有 AAAA。代理的并发 A/AAAA + 缓存把
+这条长尾消掉。100MB 上传 Cloudflare：直连 15.1 MB/s，代理 11.1 MB/s（慢约
+26%），代理 CPU 仍接近 0。QUIC/Hysteria2、IPv4 多路径和源端口/运营商关系见
+[`../docs/browser-benchmark.md`](../docs/browser-benchmark.md)。
+
 ## IPv6 结论
 
 - 新流前 K 个包会被连续丢弃/限速，K 随时段/流变化（实测 1–16）；
@@ -136,6 +156,7 @@ connect 后直连约 7.0/11.0 MB/s，代理约 6.1/13.9 MB/s，两组有重叠�
 - UDP 复读只对可重复的协议安全（DNS 同 ID、QUIC Initial）；任意 UDP 可能重复触发副作用，需协议识别或改用隧道。
 - 每条新 TCP 流 16 个 SYN、每条新 UDP 流 16 个首包；高连接率场景要加令牌桶/限速。
 - UDP 每个新 flow 一个上游 socket；真实 DNS 复用源端口时会少很多，短连接 DNS 可能累积内存（`--udp-flows` 上限兜底）。
+- QUIC/HTTP3 需要客户端支持 SOCKS5 UDP ASSOCIATE；Chrome 的 SOCKS5 不代理 UDP。Hysteria2 是 QUIC/UDP 协议，TCP CONNECT 代理不能承载，需要 TUN/透明重定向或支持 UDP detour 的客户端。
 - 仅限自有/授权网络使用；不要用于绕过计费或第三方探测。
 
 ## License

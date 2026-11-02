@@ -34,6 +34,13 @@ type proxy struct {
 	udpCopies   int
 	udpInterval time.Duration
 	udpFlows    int
+	dnsMu       sync.Mutex
+	dns         map[string]dnsEntry
+}
+
+type dnsEntry struct {
+	ip  string
+	exp time.Time
 }
 
 func main() {
@@ -59,7 +66,7 @@ func main() {
 	)
 	flag.IntVar(&listen, "listen", 18080, "本地监听端口")
 	flag.IntVar(&n, "n", 5, "每轮并行源端口数")
-	flag.IntVar(&family, "family", 4, "IP family: 4 或 6")
+	flag.IntVar(&family, "family", 4, "IP family: 4 或 6（6 优先 IPv6，v4-only/连接失败回退 IPv4）")
 	flag.IntVar(&rounds, "rounds", 1, "窗口轮数")
 	flag.IntVar(&base, "base", 20000, "源端口起始")
 	flag.IntVar(&end, "end", 32000, "源端口结束（不含）")
@@ -142,6 +149,7 @@ func main() {
 		udpCopies:   udpCopies,
 		udpInterval: udpInterval,
 		udpFlows:    max(1, udpFlows),
+		dns:         make(map[string]dnsEntry),
 	}
 	if transparent {
 		ip, port, err := parseTarget(target, family)
@@ -175,6 +183,26 @@ func isLocalIP(ipStr string) bool {
 	}
 	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
 		ip.IsLinkLocalMulticast() || ip.IsUnspecified()
+}
+
+func (p *proxy) resolve(host string) (string, error) {
+	if ip := net.ParseIP(host); ip != nil {
+		return race.ResolveFast(context.Background(), host, p.family)
+	}
+	p.dnsMu.Lock()
+	e, ok := p.dns[host]
+	p.dnsMu.Unlock()
+	if ok && time.Now().Before(e.exp) {
+		return e.ip, nil
+	}
+	ip, err := race.ResolveFast(context.Background(), host, p.family)
+	if err != nil {
+		return "", err
+	}
+	p.dnsMu.Lock()
+	p.dns[host] = dnsEntry{ip: ip, exp: time.Now().Add(30 * time.Second)}
+	p.dnsMu.Unlock()
+	return ip, nil
 }
 
 func (p *proxy) connect(ip string, port int) (*net.TCPConn, int, time.Duration, int, error) {
@@ -284,7 +312,7 @@ func (p *proxy) handle(c net.Conn) {
 		}
 	}
 
-	ip, err := race.ResolveIP(host, p.family)
+	ip, err := p.resolve(host)
 	if err != nil {
 		log.Printf("[resolve] %s: %v", host, err)
 		if socks {
@@ -296,6 +324,15 @@ func (p *proxy) handle(c net.Conn) {
 	}
 
 	up, lport, dt, round, err := p.connect(ip, port)
+	if err != nil && p.family == 6 && net.ParseIP(ip).To4() == nil {
+		if ip4, e4 := race.ResolveIP(host, 4); e4 == nil {
+			log.Printf("v6 %s failed, retry v4 %s", ip, ip4)
+			up, lport, dt, round, err = p.connect(ip4, port)
+			if err == nil {
+				ip = ip4
+			}
+		}
+	}
 	if err != nil {
 		log.Printf("FAIL %s->%s:%d n=%d rounds=%d t=%s: %v",
 			host, ip, port, p.n, p.rounds, dt.Round(time.Millisecond), err)
