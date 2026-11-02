@@ -230,8 +230,8 @@ int main(int argc, char **argv)
     }
     if (dt == 0)
         dt = now_ms() - t0;
-    printf("ok=%d time=%.1fms copies=%d sent=%d synlen=%zu err=%d\n",
-           ok, dt, copies, sent, synlen, last_err);
+    printf("ok=%d time=%.1fms copies=%d sent=%d synlen=%zu err=%d lport=%d\n",
+           ok, dt, copies, sent, synlen, last_err, lport);
     close(fd); close(pf); close(raw);
     return ok ? 0 : 1;
 }
