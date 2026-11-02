@@ -4,3 +4,4 @@ __pycache__/
 *.pyc
 race-*.log
 userspace/bin/
+synspray/synspray
