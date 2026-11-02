@@ -22,6 +22,7 @@ import (
 
 type proxy struct {
 	racer       *race.Racer
+	family      int
 	timeout     time.Duration
 	sem         chan struct{}
 	transparent bool
@@ -35,6 +36,7 @@ func main() {
 	var (
 		listen      int
 		n, rounds   int
+		family      int
 		base, end   int
 		step        int
 		threads     int
@@ -47,6 +49,7 @@ func main() {
 	)
 	flag.IntVar(&listen, "listen", 18080, "本地监听端口")
 	flag.IntVar(&n, "n", 5, "每轮并行源端口数")
+	flag.IntVar(&family, "family", 4, "IP family: 4 或 6")
 	flag.IntVar(&rounds, "rounds", 1, "窗口轮数")
 	flag.IntVar(&base, "base", 20000, "源端口起始")
 	flag.IntVar(&end, "end", 32000, "源端口结束（不含）")
@@ -60,6 +63,9 @@ func main() {
 	flag.BoolVar(&verbose, "verbose", false, "打印每个源端口的 SYN 结果")
 	flag.Parse()
 
+	if family != 4 && family != 6 {
+		log.Fatalf("--family 只能是 4 或 6")
+	}
 	if noBind {
 		iface = ""
 	} else if iface == "" {
@@ -71,7 +77,7 @@ func main() {
 
 	logf := log.Printf
 	r, err := race.New(race.Config{
-		N: n, Rounds: rounds, Base: base, End: end, Step: step,
+		N: n, Family: family, Rounds: rounds, Base: base, End: end, Step: step,
 		Timeout: timeout, Iface: iface, Verbose: verbose, Logf: logf,
 	})
 	if err != nil {
@@ -80,6 +86,7 @@ func main() {
 
 	p := &proxy{
 		racer:       r,
+		family:      family,
 		timeout:     timeout,
 		sem:         make(chan struct{}, max(1, threads)),
 		transparent: transparent,
@@ -88,7 +95,7 @@ func main() {
 		verbose:     verbose,
 	}
 	if transparent {
-		ip, port, err := parseTarget(target)
+		ip, port, err := parseTarget(target, family)
 		if err != nil {
 			log.Fatalf("--target: %v", err)
 		}
@@ -122,10 +129,14 @@ func isLocalIP(ipStr string) bool {
 }
 
 func (p *proxy) connect(ip string, port int) (*net.TCPConn, int, time.Duration, int, error) {
+	network := "tcp4"
+	if p.family == 6 {
+		network = "tcp6"
+	}
 	// 回环/私网/链路本地不走校园出口，竞速没有意义，直接连。
 	if isLocalIP(ip) {
 		d := net.Dialer{Timeout: time.Second}
-		c, err := d.Dial("tcp4", net.JoinHostPort(ip, strconv.Itoa(port)))
+		c, err := d.Dial(network, net.JoinHostPort(ip, strconv.Itoa(port)))
 		if err != nil {
 			return nil, 0, 0, 0, err
 		}
@@ -134,7 +145,7 @@ func (p *proxy) connect(ip string, port int) (*net.TCPConn, int, time.Duration, 
 	return p.racer.Race(context.Background(), ip, port)
 }
 
-func parseTarget(spec string) (string, int, error) {
+func parseTarget(spec string, family int) (string, int, error) {
 	host, portStr, err := net.SplitHostPort(spec)
 	if err != nil {
 		return "", 0, err
@@ -143,7 +154,7 @@ func parseTarget(spec string) (string, int, error) {
 	if err != nil || port < 1 || port > 65535 {
 		return "", 0, fmt.Errorf("端口必须在 1..65535")
 	}
-	ip, err := race.ResolveIPv4(host)
+	ip, err := race.ResolveIP(host, family)
 	if err != nil {
 		return "", 0, err
 	}
@@ -158,6 +169,11 @@ func (p *proxy) handle(c net.Conn) {
 		_ = c.Close()
 		return
 	}
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[panic] %v", r)
+		}
+	}()
 
 	client, ok := c.(*net.TCPConn)
 	if !ok {
@@ -214,7 +230,7 @@ func (p *proxy) handle(c net.Conn) {
 		}
 	}
 
-	ip, err := race.ResolveIPv4(host)
+	ip, err := race.ResolveIP(host, p.family)
 	if err != nil {
 		log.Printf("[resolve] %s: %v", host, err)
 		if socks {
@@ -379,11 +395,21 @@ func tunnel(client *net.TCPConn, br *bufio.Reader, upstream *net.TCPConn) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[panic] pipe: %v", r)
+			}
+		}()
 		_, _ = io.Copy(upstream, client)
 		_ = upstream.CloseWrite()
 	}()
 	go func() {
 		defer wg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[panic] pipe: %v", r)
+			}
+		}()
 		_, _ = io.Copy(client, upstream)
 		_ = client.CloseWrite()
 	}()

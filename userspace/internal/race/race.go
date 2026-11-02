@@ -21,6 +21,7 @@ const soBindToDevice = 25
 // Config controls the racer.
 type Config struct {
 	N       int
+	Family  int
 	Rounds  int
 	Base    int
 	End     int
@@ -143,16 +144,25 @@ func DefaultIface() string {
 
 // ResolveIPv4 resolves host via the system resolver and returns an IPv4 string.
 func ResolveIPv4(host string) (string, error) {
+	return ResolveIP(host, 4)
+}
+
+// ResolveIP resolves host and picks an address of the requested family (4 or 6).
+func ResolveIP(host string, family int) (string, error) {
 	ips, err := net.LookupIP(host)
 	if err != nil {
 		return "", err
 	}
 	for _, ip := range ips {
-		if v4 := ip.To4(); v4 != nil {
+		if family == 6 {
+			if ip.To4() == nil && ip.To16() != nil {
+				return ip.String(), nil
+			}
+		} else if v4 := ip.To4(); v4 != nil {
 			return v4.String(), nil
 		}
 	}
-	return "", fmt.Errorf("%s 没有 IPv4 地址", host)
+	return "", fmt.Errorf("%s 没有 IPv%d 地址", host, family)
 }
 
 // Racer races N source ports per round.
@@ -163,6 +173,9 @@ type Racer struct {
 }
 
 func New(cfg Config) (*Racer, error) {
+	if cfg.Family == 0 {
+		cfg.Family = 4
+	}
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 2500 * time.Millisecond
 	}
@@ -197,12 +210,21 @@ func (r *Racer) attempt(ctx context.Context, ip string, port, base int) (*net.TC
 		go func(i int) {
 			defer wg.Done()
 			lport := base + i
+			defer func() {
+				if r := recover(); r != nil {
+					ch <- attemptResult{lport: lport, err: fmt.Errorf("panic: %v", r)}
+				}
+			}()
+			network := "tcp4"
+			if r.cfg.Family == 6 {
+				network = "tcp6"
+			}
 			d := net.Dialer{
 				LocalAddr: &net.TCPAddr{Port: lport},
 				Timeout:   r.cfg.Timeout,
 				Control:   BindControl(r.cfg.Iface),
 			}
-			c, err := d.DialContext(actx, "tcp4", net.JoinHostPort(ip, strconv.Itoa(port)))
+			c, err := d.DialContext(actx, network, net.JoinHostPort(ip, strconv.Itoa(port)))
 			if err != nil {
 				ch <- attemptResult{lport: lport, err: err}
 				return

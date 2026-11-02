@@ -18,6 +18,7 @@ import (
 func main() {
 	var (
 		n, trials int
+		family    int
 		base, end int
 		step      int
 		timeout   time.Duration
@@ -25,6 +26,7 @@ func main() {
 		noBind    bool
 	)
 	flag.IntVar(&n, "n", 5, "每轮并行源端口数")
+	flag.IntVar(&family, "family", 4, "IP family: 4 或 6")
 	flag.IntVar(&trials, "trials", 10, "试验次数")
 	flag.IntVar(&base, "base", 20000, "源端口起始")
 	flag.IntVar(&end, "end", 32000, "源端口结束（不含）")
@@ -43,9 +45,12 @@ func main() {
 	if err != nil || port < 1 || port > 65535 {
 		log.Fatalf("端口非法")
 	}
-	ip, err := race.ResolveIPv4(host)
+	ip, err := race.ResolveIP(host, family)
 	if err != nil {
 		log.Fatalf("解析 %s: %v", host, err)
+	}
+	if family != 4 && family != 6 {
+		log.Fatalf("--family 只能是 4 或 6")
 	}
 	if noBind {
 		iface = ""
@@ -54,7 +59,7 @@ func main() {
 	}
 
 	r, err := race.New(race.Config{
-		N: n, Rounds: 1, Base: base, End: end, Step: step,
+		N: n, Family: family, Rounds: 1, Base: base, End: end, Step: step,
 		Timeout: timeout, Iface: iface, Verbose: true, Logf: log.Printf,
 	})
 	if err != nil {

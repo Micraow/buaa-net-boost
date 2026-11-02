@@ -15,6 +15,7 @@ make -C userspace
 
 ```bash
 userspace/bin/tcp-race --listen 18080 --n 5 --rounds 1 --base 20000 --step 8
+# IPv6：--family 6 --n 8 --timeout 3s
 # 可选：--iface wlp8s0 / --no-bind / --timeout 1.5s / --threads 256 / --verbose
 
 curl -x http://127.0.0.1:18080 -k https://目标/
@@ -39,6 +40,10 @@ userspace/bin/udp-race --listen 18081 --target 203.107.6.88 --target-port 123 \
 ```bash
 userspace/bin/probe --n 5 --trials 10 --base 20003 223.5.5.5 443
 ```
+
+## IPv6
+
+ 已支持。IPv6 的首包丢失是逐流随机、没有 IPv4 的 8 周期，N=5 只有 40%–60%，建议 ；实测 N=8 约 90%，成功建连常在 1–2 秒（靠重传）。
 
 ## 已修复的原型缺陷
 

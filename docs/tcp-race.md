@@ -107,6 +107,7 @@ curl --socks5-hostname 127.0.0.1:18080 -k \
 ```bash
 ../userspace/bin/tcp-race --listen 18080 --transparent \
   --target 104.16.132.229:443 --n 5 --rounds 1 --verbose --base 20000
+# IPv6：--family 6 --n 8 --timeout 3s
 ```
 
 日志示例：

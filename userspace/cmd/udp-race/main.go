@@ -3,6 +3,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"strconv"
@@ -28,6 +29,7 @@ type relay struct {
 	rounds   int
 	timeout  time.Duration
 	idle     time.Duration
+	family   int
 	iface    string
 	verbose  bool
 	window   *race.PortWindow
@@ -42,6 +44,7 @@ func main() {
 		listen     int
 		targetHost string
 		targetPort int
+		family     int
 		n, rounds  int
 		base, end  int
 		step       int
@@ -56,6 +59,7 @@ func main() {
 	flag.StringVar(&targetHost, "target", "", "目标 IP")
 	flag.IntVar(&targetPort, "target-port", 0, "目标端口")
 	flag.IntVar(&n, "n", 5, "每轮并行源端口数")
+	flag.IntVar(&family, "family", 4, "IP family: 4 或 6")
 	flag.IntVar(&rounds, "rounds", 1, "窗口轮数")
 	flag.IntVar(&base, "base", 20000, "源端口起始")
 	flag.IntVar(&end, "end", 32000, "源端口结束（不含）")
@@ -71,11 +75,14 @@ func main() {
 	if targetHost == "" || targetPort < 1 || targetPort > 65535 {
 		log.Fatalf("需要 --target 和 --target-port")
 	}
-	ip, err := race.ResolveIPv4(targetHost)
+	if family != 4 && family != 6 {
+		log.Fatalf("--family 只能是 4 或 6")
+	}
+	ip, err := race.ResolveIP(targetHost, family)
 	if err != nil {
 		log.Fatalf("解析 %s: %v", targetHost, err)
 	}
-	target, err := net.ResolveUDPAddr("udp4", net.JoinHostPort(ip, strconv.Itoa(targetPort)))
+	target, err := net.ResolveUDPAddr(fmt.Sprintf("udp%d", family), net.JoinHostPort(ip, strconv.Itoa(targetPort)))
 	if err != nil {
 		log.Fatalf("目标: %v", err)
 	}
@@ -91,7 +98,7 @@ func main() {
 	}
 	// racer 仅用于统一的参数校验/日志接口；UDP 竞速在下面单独实现。
 	racer, err := race.New(race.Config{
-		N: n, Rounds: rounds, Base: base, End: end, Step: step,
+		N: n, Family: family, Rounds: rounds, Base: base, End: end, Step: step,
 		Timeout: timeout, Iface: iface, Verbose: verbose, Logf: log.Printf,
 	})
 	if err != nil {
@@ -112,6 +119,7 @@ func main() {
 		rounds:   rounds,
 		timeout:  timeout,
 		idle:     idle,
+		family:   family,
 		iface:    iface,
 		verbose:  verbose,
 		window:   win,
@@ -216,7 +224,7 @@ func (r *relay) doRace(first []byte) (*net.UDPConn, []byte, int) {
 				Timeout:   r.timeout,
 				Control:   race.BindControl(r.iface),
 			}
-			c, err := d.Dial("udp4", r.target.String())
+			c, err := d.Dial(fmt.Sprintf("udp%d", r.family), r.target.String())
 			if err != nil {
 				continue
 			}
