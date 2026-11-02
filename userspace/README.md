@@ -102,7 +102,10 @@ userspace/bin/udp-race --listen 18081 --target 203.107.6.88 --target-port 123 \
 | UDP 代理 CPU / RSS | 50 个新流 0.10s（2%），RSS +8.6MB；每流一个上游 socket |
 
 直连和代理使用同一个目标 IP（`--resolve`）做对比；校园链路本身波动很大，
-吞吐数字只代表这一时段，不代表代理上限。代理的 `io.Copy` 在 Linux 上走
+吞吐数字只代表这一时段，不代表代理上限。表中 MB/s 是 `size/time_total`，
+**包含 connect**：直连每轮卡 5.23s，代理上游 connect 只有几十毫秒。扣掉
+connect 后直连约 7.0/11.0 MB/s，代理约 6.1/13.9 MB/s，两组有重叠；代理的
+稳定收益在 connect 长尾，不是物理带宽。代理的 `io.Copy` 在 Linux 上走
 `splice`，CPU 开销主要来自每连接的 TLS/HTTP 端到端（不在代理里）。
 详细方法和原始输出见 [`../docs/benchmark.md`](../docs/benchmark.md)。
 

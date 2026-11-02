@@ -85,7 +85,10 @@ curl -x http://127.0.0.1:18080 https://目标/
 | UDP DNS | 50/50，中位 65.7ms | 单包 15/50 |
 
 代理 CPU 在 100MB 传输中 0.15–0.18s，helper 0.00–0.01s；额外包量约 16 个
-SYN/新 TCP 流、16 个首包/新 UDP 流。完整方法和开销见
+SYN/新 TCP 流、16 个首包/新 UDP 流。表中的 MB/s 是 `size/time_total`，包含
+connect：直连每轮卡 5.23s，代理上游 connect 只有几十毫秒。扣掉 connect 后
+直连约 7.0/11.0 MB/s、代理约 6.1/13.9 MB/s，两组有重叠；代理的稳定收益在
+connect 长尾，不是物理带宽。完整方法和开销见
 [`docs/benchmark.md`](docs/benchmark.md)。
 
 ## 核心结论
