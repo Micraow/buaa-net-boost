@@ -9,7 +9,7 @@ connect_redirect.bpf.o: connect_redirect.bpf.c
 	$(CLANG) $(BPF_CFLAGS) -c $< -o $@
 
 loader: loader.c
-	$(CC) $(CFLAGS) -o $@ $< -lbpf -lelf -lz
+	$(CC) $(CFLAGS) -o $@ $< -lbpf -lelf -lz -pthread
 
 clean:
 	rm -f connect_redirect.bpf.o loader

@@ -101,3 +101,22 @@ curl --socks5-hostname 127.0.0.1:18080 -k \
 - 连接建立后若路径失效，竞速不会自动迁移；需要应用层检测到中断后重新竞速/重连。
 - 源端口要避开系统临时端口范围；如果途中有 NAT 改写源端口，桶选择不再可控，但随机源端口竞速仍能提高成功率。
 - 仅在自有/授权环境使用，不要用于绕过计费或对第三方发起探测。
+
+### 透明模式（配合 eBPF 重定向）
+
+```bash
+python3 ../userspace/proxy.py --listen 18080 --transparent \
+  --target 104.16.132.229:443 --n 5 --rounds 2 --verbose --base 20000
+```
+
+日志示例：
+
+```
+[syn] window 20000-20004 (5 sockets)
+[syn] port 20004 SYN-ACK at 188ms
+[syn] port 20000 no reply, closing at 2500ms
+[syn] port 20001 no reply, closing at 2500ms
+[syn] port 20002 no reply, closing at 2500ms
+[syn] port 20003 no reply, closing at 2500ms
+[transparent] OK -> 104.16.132.229:443 winner=20004 round=1 t=189ms
+```

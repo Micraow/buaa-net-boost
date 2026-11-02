@@ -89,3 +89,17 @@ PY
 - 只挂测试客户端的 cgroup；代理和 loader 不要放进同一个 cgroup，否则代理自己的 connect 会被重定向成环。
 - 当前只支持 IPv4；IPv6 需要 `cgroup/connect6` 和 `user_ip6`。
 - 结束后可删除 cgroup：`sudo rmdir /sys/fs/cgroup/zcode-race`（确保里面没有进程）。
+
+## 实测（2026-11-02）
+
+- 问题仍在：64 个源端口扫描 32/64 成功；坏桶起点 N=1、N=4 均为 0/8，N=5 为 8/8。
+- eBPF 重定向生效：`connect=0.0001s`；直连对照组 1–4/5，经 eBPF 竞速 5/5、3/3。
+- 竞速日志：每轮 5 个端口中一个在 160–190 ms 完成，其余无回音；健康目标（Apple）首端口 4–6 ms 即胜出。
+- 端到端总时间：Cloudflare 直连成功约 0.55 s，经代理约 0.59–0.80 s；直连失败一次要等 8 s。
+
+## 与 TUN / fake-ip 的关系
+
+- eBPF 的 connect 钩子在 TUN 之前运行；代理的上游绑定 wlan0，绕过 TUN。两者可以共存。
+- **fake-ip 会让钩子看到 198.18.x 的假地址**，匹配不到真实目标；此时要么把 DNS 改成 redir-host，要么改用应用层代理。
+- 只把客户端应用放进被挂载的 cgroup；把 mihomo/代理自己放进去，会把它们到目标的 connect 也重定向成环。
+- `bpf_printk` 参数超过 3 个会触发 helper 限制，实测会导致重定向不生效；保持 4 个参数以内。

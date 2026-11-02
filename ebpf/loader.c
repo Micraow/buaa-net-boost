@@ -4,10 +4,12 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <bpf/bpf.h>
@@ -20,6 +22,35 @@ static void on_sig(int sig)
 {
     (void)sig;
     running = 0;
+}
+
+static void *trace_reader(void *arg)
+{
+    (void)arg;
+    const char *paths[] = {
+        "/sys/kernel/tracing/trace_pipe",
+        "/sys/kernel/debug/tracing/trace_pipe",
+        NULL,
+    };
+    FILE *f = NULL;
+    for (int i = 0; paths[i]; i++) {
+        f = fopen(paths[i], "r");
+        if (f)
+            break;
+    }
+    if (!f) {
+        fprintf(stderr, "trace_pipe not available\n");
+        return NULL;
+    }
+    char buf[512];
+    while (running && fgets(buf, sizeof(buf), f)) {
+        if (strstr(buf, "race redirect")) {
+            fputs(buf, stdout);
+            fflush(stdout);
+        }
+    }
+    fclose(f);
+    return NULL;
 }
 
 static unsigned long long pack(const char *spec)
@@ -54,8 +85,8 @@ static int set_map(struct bpf_object *obj, const char *name, unsigned long long 
 
 int main(int argc, char **argv)
 {
-    if (argc != 5) {
-        fprintf(stderr, "usage: %s <bpf.o> <cgroup> <target ip:port> <redirect ip:port>\n", argv[0]);
+    if (argc != 5 && argc != 6) {
+        fprintf(stderr, "usage: %s <bpf.o> <cgroup> <target ip:port> <redirect ip:port> [seconds]\n", argv[0]);
         return 1;
     }
 
@@ -63,6 +94,7 @@ int main(int argc, char **argv)
     const char *cgroup = argv[2];
     unsigned long long target = pack(argv[3]);
     unsigned long long redirect = pack(argv[4]);
+    int seconds = argc == 6 ? atoi(argv[5]) : 0;
 
     struct bpf_object *obj = bpf_object__open_file(obj_path, NULL);
     long err = libbpf_get_error(obj);
@@ -99,11 +131,16 @@ int main(int argc, char **argv)
     printf("ready: target=%s redirect=%s\n", argv[3], argv[4]);
     fflush(stdout);
 
+    pthread_t tid;
+    if (pthread_create(&tid, NULL, trace_reader, NULL) == 0)
+        pthread_detach(tid);
+
     signal(SIGINT, on_sig);
     signal(SIGTERM, on_sig);
-    while (running)
+    time_t start = time(NULL);
+    while (running && (seconds <= 0 || time(NULL) - start < seconds))
         sleep(1);
 
-    bpf_object__close(obj);
-    return 0;
+    fflush(stdout);
+    _exit(0);
 }
