@@ -10,7 +10,7 @@ COPIES="${4:-4}"
 INTERVAL="${5:-20}"
 TIMEOUT="${6:-3000}"
 
-if [ ! -x "$HERE/synspray" ]; then
+if [ ! -x "$HERE/synspray" ] || [ "$HERE/synspray.c" -nt "$HERE/synspray" ]; then
 	(cd "$HERE" && gcc -O2 -Wall -o synspray synspray.c)
 fi
 

@@ -103,6 +103,9 @@ int main(int argc, char **argv)
 
     int fd = socket(AF_INET6, SOCK_STREAM, 0);
     if (fd < 0) { perror("socket tcp"); return 1; }
+    if (setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, iface,
+                   (socklen_t)(strlen(iface) + 1)) != 0)
+        perror("SO_BINDTODEVICE tcp");
     struct sockaddr_in6 local;
     memset(&local, 0, sizeof(local));
     local.sin6_family = AF_INET6;
@@ -166,12 +169,23 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    // IPPROTO_RAW 发完整 IPv6 包；端口在 TCP 头里，sockaddr 的端口必须为 0，
+    // 否则本机内核会以 EINVAL 拒绝（实测 >= 443 的端口均如此）。
     int raw = socket(AF_INET6, SOCK_RAW, IPPROTO_RAW);
     if (raw < 0) { perror("raw socket (需要 root)"); return 1; }
+    if (setsockopt(raw, SOL_SOCKET, SO_BINDTODEVICE, iface,
+                   (socklen_t)(strlen(iface) + 1)) != 0)
+        perror("SO_BINDTODEVICE raw");
+    struct sockaddr_in6 rawdst = dst;
+    rawdst.sin6_port = 0;
 
+    int sent = 0;
     for (int i = 0; i < copies; i++) {
-        if (sendto(raw, syn, synlen, 0, (struct sockaddr *)&dst, sizeof(dst)) < 0)
+        if (sendto(raw, syn, synlen, 0,
+                   (struct sockaddr *)&rawdst, sizeof(rawdst)) < 0)
             perror("sendto raw");
+        else
+            sent++;
         if (i + 1 < copies)
             usleep((useconds_t)interval * 1000);
     }
@@ -189,7 +203,7 @@ int main(int argc, char **argv)
             break;
         }
     }
-    printf("ok=%d time=%.1fms copies=%d synlen=%zu\n", ok, dt, copies, synlen);
+    printf("ok=%d time=%.1fms copies=%d sent=%d synlen=%zu\n", ok, dt, copies, sent, synlen);
     close(fd); close(pf); close(raw);
     return ok ? 0 : 1;
 }

@@ -32,6 +32,12 @@ sudo ./test.sh 2402:f000:1:400::2 443 10 4 20 3000
 | 复读成功率明显更高，延迟降到几十毫秒 | 设备只丢新流首包；这个思路有效，值得做成透明层 |
 | 复读成功率反而低 | 复读包被识别为异常/重复，触发限速；放弃 |
 
+## 实现注意
+
+- `IPPROTO_RAW` 发送完整 IPv6 包时，`sockaddr_in6.sin6_port` 必须为 0（端口在 TCP 头里）；非零端口会被本机内核以 `EINVAL` 拒绝，这是最初 `sendto: Invalid argument` 的原因。
+- TCP socket 和 raw socket 都用 `SO_BINDTODEVICE` 绑定到抓包接口，避免 TUN/多网卡下与基线走不同路径。
+- 已在用户命名空间的 loopback 上做端到端验证：`sent=4`、`ok=1`，监听端成功 `accept`；真实链路的对比需要 root 运行。
+
 ## 注意
 
 - 需要 root：`AF_PACKET` 抓包 + `SOCK_RAW` 发送。
