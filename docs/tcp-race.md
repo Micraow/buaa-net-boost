@@ -70,7 +70,7 @@ http=206 size=1000001 time=1.26s
 ### 竞速代理（HTTP CONNECT + SOCKS5 CONNECT）
 
 ```bash
-../userspace/bin/tcp-race --listen 18080 --n 5 --rounds 2 --base 20000 --step 8
+../userspace/bin/tcp-race --listen 18080 --n 5 --rounds 1 --base 20000 --step 8
 
 # HTTP CONNECT
 curl -x http://127.0.0.1:18080 -k https://104.16.132.229/
@@ -83,7 +83,7 @@ curl --socks5-hostname 127.0.0.1:18080 -k \
 代理特性：
 
 - 每个新连接在 `[base, end)` 内取一个 N 端口窗口，窗口按 `step=8` 滚动，避免复用同一 5 元组；
-- 竞速失败时自动换下一个窗口重试（`--rounds`）；
+- 默认只跑一轮（`--rounds 1`）；需要重试时显式调大 `--rounds`。
 - 已连接的败者用 RST 关闭；胜者在隧道结束后正常关闭；
 - 隧道空闲 600 s 自动断开；
 - 竞速是并行的，首个成功仍在约 1 个 RTT。
@@ -106,7 +106,7 @@ curl --socks5-hostname 127.0.0.1:18080 -k \
 
 ```bash
 ../userspace/bin/tcp-race --listen 18080 --transparent \
-  --target 104.16.132.229:443 --n 5 --rounds 2 --verbose --base 20000
+  --target 104.16.132.229:443 --n 5 --rounds 1 --verbose --base 20000
 ```
 
 日志示例：

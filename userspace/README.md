@@ -14,7 +14,7 @@ make -C userspace
 ## TCP 竞速代理
 
 ```bash
-userspace/bin/tcp-race --listen 18080 --n 5 --rounds 2 --base 20000 --step 8
+userspace/bin/tcp-race --listen 18080 --n 5 --rounds 1 --base 20000 --step 8
 # 可选：--iface wlp8s0 / --no-bind / --timeout 2.5s / --threads 256 / --verbose
 
 curl -x http://127.0.0.1:18080 -k https://目标/

@@ -6,6 +6,8 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 TARGET="${1:-104.16.132.229:443}"
 LISTEN="${2:-18080}"
+N="${3:-5}"
+ROUNDS="${4:-1}"
 
 if [[ ! "$TARGET" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}:[0-9]{1,5}$ ]]; then
 	echo "target 必须是 IPv4:port，收到: $TARGET" >&2
@@ -53,10 +55,10 @@ trap cleanup EXIT INT TERM
 # 代理以普通用户运行，不解析不可信网络数据为 root
 if [ "$(id -u)" -eq 0 ]; then
 	sudo -u "$RUN_AS" -- "$BIN" --listen "$LISTEN" --transparent --target "$TARGET" \
-		--n 5 --rounds 2 --verbose --base 20000 > "$LOG_PROXY" 2>&1 &
+		--n "$N" --rounds "$ROUNDS" --verbose --base 20000 > "$LOG_PROXY" 2>&1 &
 else
 	"$BIN" --listen "$LISTEN" --transparent --target "$TARGET" \
-		--n 5 --rounds 2 --verbose --base 20000 > "$LOG_PROXY" 2>&1 &
+		--n "$N" --rounds "$ROUNDS" --verbose --base 20000 > "$LOG_PROXY" 2>&1 &
 fi
 PP=$!
 

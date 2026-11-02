@@ -47,7 +47,7 @@ func main() {
 	)
 	flag.IntVar(&listen, "listen", 18080, "本地监听端口")
 	flag.IntVar(&n, "n", 5, "每轮并行源端口数")
-	flag.IntVar(&rounds, "rounds", 2, "窗口轮数")
+	flag.IntVar(&rounds, "rounds", 1, "窗口轮数")
 	flag.IntVar(&base, "base", 20000, "源端口起始")
 	flag.IntVar(&end, "end", 32000, "源端口结束（不含）")
 	flag.IntVar(&step, "step", 8, "窗口滚动步长")

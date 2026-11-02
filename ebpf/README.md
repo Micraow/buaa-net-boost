@@ -76,7 +76,7 @@ race redirect 104.16.132.229:443 -> 127.0.0.1:18080
 
 ```bash
 ../userspace/bin/tcp-race --listen 18080 --transparent --target 104.16.132.229:443 \
-  --n 5 --rounds 2 --verbose --base 20000
+  --n 5 --rounds 1 --verbose --base 20000
 
 # 另一个终端：TLS 客户端直连 127.0.0.1:18080，SNI=cloudflare.com
 python3 - <<'PY'
