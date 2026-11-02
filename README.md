@@ -21,6 +21,8 @@
 | `docs/tcp-race.md` | TCP 竞速代理用法与实测 |
 | `docs/udp-race.md` | UDP 竞速中继用法与实测 |
 | `docs/ebpf-vs-tun.md` | eBPF / TUN / LD_PRELOAD 方案对比 |
+| `docs/benchmark.md` | 方案一实测：延迟、100MB 带宽、CPU/RSS、额外包量 |
+| `synspray/` | 同 5 元组 SYN 复读的独立验证工具与测量数据 |
 
 ## 快速开始
 
@@ -53,12 +55,61 @@ cd ebpf && make
 
 `userspace/README.md` 列出了 Go 实现修复的原型缺陷（假胜者、SOCKS5 提前回成功、CONNECT 余量、半关闭、DNS、网卡硬编码、UDP 缓冲等）。
 
+## 方案一：SOCKS5/HTTP CONNECT + 特权 SYN helper（IPv6 推荐）
+
+本地代理承载应用数据，特权小助手只抓 SYN 并原样复读；UDP 的首包复读由代理
+自己的上游 socket 完成，不需要 root。
+
+```bash
+make -C userspace
+sudo setcap cap_net_raw+ep userspace/bin/spray-helper
+userspace/bin/spray-helper --socket /tmp/buaa-net-boost-spray.sock --iface wlan0 &
+
+userspace/bin/tcp-race \
+  --listen 18080 --family 6 --n 2 --rounds 1 --timeout 3s \
+  --spray 8 --spray-interval 20ms \
+  --spray-helper /tmp/buaa-net-boost-spray.sock \
+  --iface wlan0 --no-bind
+
+curl -x http://127.0.0.1:18080 https://目标/
+# 浏览器 HTTP/SOCKS5 代理填 127.0.0.1:18080；SOCKS5 也支持 UDP ASSOCIATE
+```
+
+一批探测：TCP 2 条 5 元组 × 8 份 SYN（16 个），UDP 单 5 元组 × 16 个首包；
+第一条 SYN-ACK / 第一份响应胜出，其余 RST/丢弃。实测（TUNA / Cloudflare DNS）：
+
+| 项目 | 代理 | 直连 |
+|---|---|---|
+| TCP 小请求 | 20/20，中位 89ms | 19/20，中位 1.08s，1 次 12s 超时 |
+| 100MB 下载 | 6.1 / 13.8 MB/s；CPU 1–2% | 5.2 / 7.1 MB/s；connect 5.23s |
+| UDP DNS | 50/50，中位 65.7ms | 单包 15/50 |
+
+代理 CPU 在 100MB 传输中 0.15–0.18s，helper 0.00–0.01s；额外包量约 16 个
+SYN/新 TCP 流、16 个首包/新 UDP 流。完整方法和开销见
+[`docs/benchmark.md`](docs/benchmark.md)。
+
 ## 核心结论
 
 - 坏桶最长连续 4 个，所以 **5 个连续源端口必然至少 1 个落在好桶**；实测 N=5 时 TCP 12/12、UDP 20/20。
 - 竞速只冗余握手/首包，不重复应用数据；正常延迟仍约 1 个 RTT。
 - eBPF 只负责把流量透明地送到竞速器；竞速必须在用户态完成。
+- IPv6 新流的前 K 个包会被连续丢弃/限速（K 随时段/流变化，实测 1–16）；同 5 元组复读可把建连从 1s 级降到几十毫秒。TCP 2×8、UDP 1×16 是当前实测最稳的一批参数。
 
 ## 合规
 
 仅在自有或授权网络中使用。不要用于绕过计费、对第三方发起探测或规避审计。报告中的 IP、端口、路径来自特定测试环境，换环境需要调整参数。
+
+
+## License
+
+This repository is **source-available under CC BY-NC 4.0**:
+noncommercial use only, attribution required, commercial use requires a
+separate written license. See `LICENSE` and `NOTICE`.
+
+CC BY-NC 4.0 is **not an OSI-approved open-source license**, because OSI
+licenses cannot restrict commercial use. If you need an OSI license, no OSI
+license can provide the "no commercial use" restriction requested here.
+
+The `char _license[] SEC("license") = "GPL";` string in `ebpf/*.bpf.c` is a
+kernel verifier ABI declaration for GPL-only helpers; it does not change the
+source license above.

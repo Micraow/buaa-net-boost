@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CC-BY-NC-4.0
 // tcp-race: TCP source-port handshake racing proxy.
 //
 // Supports HTTP CONNECT, SOCKS5 CONNECT, and transparent mode.
@@ -30,22 +31,31 @@ type proxy struct {
 	targetIP    string
 	targetPort  int
 	verbose     bool
+	udpCopies   int
+	udpInterval time.Duration
+	udpFlows    int
 }
 
 func main() {
 	var (
-		listen      int
-		n, rounds   int
-		family      int
-		base, end   int
-		step        int
-		threads     int
-		timeout     time.Duration
-		iface       string
-		noBind      bool
-		transparent bool
-		target      string
-		verbose     bool
+		listen        int
+		n, rounds     int
+		family        int
+		base, end     int
+		step          int
+		threads       int
+		timeout       time.Duration
+		iface         string
+		noBind        bool
+		transparent   bool
+		target        string
+		verbose       bool
+		spray         int
+		sprayInterval time.Duration
+		sprayHelper   string
+		udpCopies     int
+		udpInterval   time.Duration
+		udpFlows      int
 	)
 	flag.IntVar(&listen, "listen", 18080, "本地监听端口")
 	flag.IntVar(&n, "n", 5, "每轮并行源端口数")
@@ -61,24 +71,60 @@ func main() {
 	flag.BoolVar(&transparent, "transparent", false, "透明模式：不解析协议，直接转发到 --target")
 	flag.StringVar(&target, "target", "", "透明模式目标 ip:port")
 	flag.BoolVar(&verbose, "verbose", false, "打印每个源端口的 SYN 结果")
+	flag.IntVar(&spray, "spray", 0, "每路径 SYN 复读份数（0 关闭，仅 IPv6）")
+	flag.DurationVar(&sprayInterval, "spray-interval", 20*time.Millisecond, "SYN 复读间隔")
+	flag.StringVar(&sprayHelper, "spray-helper", "/tmp/buaa-net-boost-spray.sock", "spray-helper UNIX socket")
+	flag.IntVar(&udpCopies, "udp-copies", 16, "UDP 首包复读份数")
+	flag.DurationVar(&udpInterval, "udp-interval", 20*time.Millisecond, "UDP 复读间隔")
+	flag.IntVar(&udpFlows, "udp-flows", 512, "每个 UDP ASSOCIATE 的最大流数")
 	flag.Parse()
 
 	if family != 4 && family != 6 {
 		log.Fatalf("--family 只能是 4 或 6")
 	}
-	if noBind {
-		iface = ""
-	} else if iface == "" {
-		iface = race.DefaultIface()
-		if iface == "" {
-			log.Printf("[warn] 未找到默认路由网卡，将不绑定网卡")
+	if iface == "" {
+		if family == 6 {
+			iface = race.DefaultIface6()
+		} else {
+			iface = race.DefaultIface()
 		}
+	}
+	helperIface := iface
+	bindIface := helperIface
+	if noBind {
+		bindIface = ""
+	}
+	if bindIface == "" && !noBind {
+		log.Printf("[warn] 未找到默认路由网卡，将不绑定网卡")
+	}
+
+	var sprayer race.Sprayer
+	if spray > 0 {
+		if family != 6 {
+			log.Fatalf("--spray 只支持 --family 6")
+		}
+		if sprayInterval < 5*time.Millisecond || sprayInterval > 100*time.Millisecond {
+			log.Fatalf("--spray-interval 必须在 5ms..100ms")
+		}
+		s, err := newUnixSprayer(sprayHelper, helperIface, spray, sprayInterval)
+		if err != nil {
+			log.Fatalf("spray helper: %v（先启动 spray-helper，或去掉 --spray）", err)
+		}
+		sprayer = s
+		log.Printf("[spray] helper=%s iface=%s copies=%d interval=%s", sprayHelper, helperIface, spray, sprayInterval)
+	}
+	if udpCopies < 1 || udpCopies > 32 {
+		log.Fatalf("--udp-copies 必须在 1..32")
+	}
+	if udpInterval < 5*time.Millisecond || udpInterval > 100*time.Millisecond {
+		log.Fatalf("--udp-interval 必须在 5ms..100ms")
 	}
 
 	logf := log.Printf
 	r, err := race.New(race.Config{
 		N: n, Family: family, Rounds: rounds, Base: base, End: end, Step: step,
-		Timeout: timeout, Iface: iface, Verbose: verbose, Logf: logf,
+		Timeout: timeout, Iface: bindIface, Verbose: verbose, Logf: logf,
+		Sprayer: sprayer, SprayCopies: spray, SprayInterval: sprayInterval,
 	})
 	if err != nil {
 		log.Fatalf("参数错误: %v", err)
@@ -93,6 +139,9 @@ func main() {
 		n:           n,
 		rounds:      rounds,
 		verbose:     verbose,
+		udpCopies:   udpCopies,
+		udpInterval: udpInterval,
+		udpFlows:    max(1, udpFlows),
 	}
 	if transparent {
 		ip, port, err := parseTarget(target, family)
@@ -106,8 +155,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("listen: %v", err)
 	}
-	log.Printf("listen 127.0.0.1:%d n=%d rounds=%d ports=[%d,%d) step=%d iface=%q transparent=%v target=%s:%d",
-		listen, n, rounds, base, end, step, iface, transparent, p.targetIP, p.targetPort)
+	log.Printf("listen 127.0.0.1:%d n=%d rounds=%d ports=[%d,%d) step=%d iface=%q transparent=%v target=%s:%d spray=%d udp=%d",
+		listen, n, rounds, base, end, step, bindIface, transparent, p.targetIP, p.targetPort, spray, udpCopies)
 
 	for {
 		c, err := ln.Accept()
@@ -215,10 +264,15 @@ func (p *proxy) handle(c net.Conn) {
 
 	var host string
 	var port int
+	var cmd byte = 1
 	if socks {
-		host, port, err = readSocks5(br, client)
+		host, port, cmd, err = readSocks5(br, client)
 		if err != nil {
 			log.Printf("[socks5] parse: %v", err)
+			return
+		}
+		if cmd == 3 {
+			p.handleUDPAssociate(client, br)
 			return
 		}
 	} else {
@@ -302,17 +356,17 @@ func readHTTPConnect(br *bufio.Reader) (string, int, error) {
 	return host, port, nil
 }
 
-func readSocks5(br *bufio.Reader, client *net.TCPConn) (string, int, error) {
+func readSocks5(br *bufio.Reader, client *net.TCPConn) (string, int, byte, error) {
 	hdr := make([]byte, 2)
 	if _, err := io.ReadFull(br, hdr); err != nil {
-		return "", 0, err
+		return "", 0, 0, err
 	}
 	if hdr[0] != 5 {
-		return "", 0, fmt.Errorf("不是 SOCKS5")
+		return "", 0, 0, fmt.Errorf("不是 SOCKS5")
 	}
 	methods := make([]byte, int(hdr[1]))
 	if _, err := io.ReadFull(br, methods); err != nil {
-		return "", 0, err
+		return "", 0, 0, err
 	}
 	ok := false
 	for _, m := range methods {
@@ -323,20 +377,21 @@ func readSocks5(br *bufio.Reader, client *net.TCPConn) (string, int, error) {
 	}
 	if !ok {
 		_, _ = client.Write([]byte{5, 0xff})
-		return "", 0, fmt.Errorf("没有可接受的认证方法")
+		return "", 0, 0, fmt.Errorf("没有可接受的认证方法")
 	}
 	_, _ = client.Write([]byte{5, 0})
 
 	req := make([]byte, 4)
 	if _, err := io.ReadFull(br, req); err != nil {
-		return "", 0, err
+		return "", 0, 0, err
 	}
 	if req[0] != 5 {
-		return "", 0, fmt.Errorf("版本错误")
+		return "", 0, 0, fmt.Errorf("版本错误")
 	}
-	if req[1] != 1 {
+	cmd := req[1]
+	if cmd != 1 && cmd != 3 {
 		_, _ = client.Write([]byte{5, 7, 0, 1, 0, 0, 0, 0, 0, 0})
-		return "", 0, fmt.Errorf("不支持的命令")
+		return "", 0, 0, fmt.Errorf("不支持的命令")
 	}
 
 	var host string
@@ -344,33 +399,33 @@ func readSocks5(br *bufio.Reader, client *net.TCPConn) (string, int, error) {
 	case 1:
 		b := make([]byte, 4)
 		if _, err := io.ReadFull(br, b); err != nil {
-			return "", 0, err
+			return "", 0, 0, err
 		}
 		host = net.IP(b).String()
 	case 3:
 		l := make([]byte, 1)
 		if _, err := io.ReadFull(br, l); err != nil {
-			return "", 0, err
+			return "", 0, 0, err
 		}
 		b := make([]byte, int(l[0]))
 		if _, err := io.ReadFull(br, b); err != nil {
-			return "", 0, err
+			return "", 0, 0, err
 		}
 		host = string(b)
 	case 4:
 		b := make([]byte, 16)
 		if _, err := io.ReadFull(br, b); err != nil {
-			return "", 0, err
+			return "", 0, 0, err
 		}
 		host = net.IP(b).String()
 	default:
-		return "", 0, fmt.Errorf("未知 ATYP")
+		return "", 0, 0, fmt.Errorf("未知 ATYP")
 	}
 	pb := make([]byte, 2)
 	if _, err := io.ReadFull(br, pb); err != nil {
-		return "", 0, err
+		return "", 0, 0, err
 	}
-	return host, int(pb[0])<<8 | int(pb[1]), nil
+	return host, int(pb[0])<<8 | int(pb[1]), cmd, nil
 }
 
 func socksReply(c *net.TCPConn, rep byte) {

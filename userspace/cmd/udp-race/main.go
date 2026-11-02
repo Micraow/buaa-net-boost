@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CC-BY-NC-4.0
 // udp-race: UDP source-port first-packet racing relay.
 package main
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CC-BY-NC-4.0
 // Package race implements source-port-windowed TCP handshake racing.
 package race
 
@@ -18,18 +19,28 @@ import (
 
 const soBindToDevice = 25
 
+// Sprayer registers a flow so a privileged helper can capture its SYN and
+// replay it on the same 5-tuple. It must return after the helper has armed
+// the capture, but before the caller starts DialContext.
+type Sprayer interface {
+	Register(ip string, port, lport int) error
+}
+
 // Config controls the racer.
 type Config struct {
-	N       int
-	Family  int
-	Rounds  int
-	Base    int
-	End     int
-	Step    int
-	Timeout time.Duration
-	Iface   string
-	Verbose bool
-	Logf    func(format string, args ...any)
+	N             int
+	Family        int
+	Rounds        int
+	Base          int
+	End           int
+	Step          int
+	Timeout       time.Duration
+	Iface         string
+	Verbose       bool
+	Sprayer       Sprayer
+	SprayCopies   int
+	SprayInterval time.Duration
+	Logf          func(format string, args ...any)
 }
 
 // PortWindow hands out non-overlapping source-port windows.
@@ -114,6 +125,29 @@ func BindControl(iface string) func(network, address string, c syscall.RawConn) 
 		}
 		return nil
 	}
+}
+
+// DefaultIface6 finds the interface of the IPv6 default route.
+func DefaultIface6() string {
+	f, err := os.Open("/proc/net/ipv6_route")
+	if err != nil {
+		return DefaultIface()
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		p := strings.Fields(sc.Text())
+		if len(p) < 10 {
+			continue
+		}
+		if p[0] != "00000000000000000000000000000000" || p[1] != "00" {
+			continue
+		}
+		if p[9] != "" && p[9] != "lo" {
+			return p[9]
+		}
+	}
+	return DefaultIface()
 }
 
 // DefaultIface finds the interface of the IPv4 default route.
@@ -218,6 +252,11 @@ func (r *Racer) attempt(ctx context.Context, ip string, port, base int) (*net.TC
 			network := "tcp4"
 			if r.cfg.Family == 6 {
 				network = "tcp6"
+			}
+			if r.cfg.Sprayer != nil && r.cfg.SprayCopies > 0 {
+				if err := r.cfg.Sprayer.Register(ip, port, lport); err != nil {
+					r.log("[spray] port %d: %v", lport, err)
+				}
 			}
 			d := net.Dialer{
 				LocalAddr: &net.TCPAddr{Port: lport},

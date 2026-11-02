@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CC-BY-NC-4.0
 // synspray: 在同一个 5 元组上，把内核发出的 SYN 原样复读多次。
 // 需要 root（AF_PACKET 抓包 + raw IPv6 发送）。
 //

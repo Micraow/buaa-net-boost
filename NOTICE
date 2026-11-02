@@ -1,0 +1,17 @@
+buaa-net-boost
+Copyright (c) 2026 Micraow
+https://github.com/Micraow/buaa-net-boost
+
+Licensed under the Creative Commons Attribution-NonCommercial 4.0
+International Public License (CC BY-NC 4.0). See LICENSE.
+
+Required attribution:
+  "buaa-net-boost by Micraow (https://github.com/Micraow/buaa-net-boost)"
+
+Commercial use is not permitted without a separate written license
+from the copyright holder.
+
+Note: ebpf/*.bpf.c contains `char _license[] SEC("license") = "GPL";`
+because the kernel verifier requires that string for GPL-only BPF
+helpers. It is a kernel ABI declaration, not the source license; the
+source in this repository is licensed under CC BY-NC 4.0.

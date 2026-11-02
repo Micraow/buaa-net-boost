@@ -1,4 +1,5 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: CC-BY-NC-4.0
+// The `_license` string below is a kernel verifier ABI declaration; the source license is CC BY-NC 4.0.
 // 把指定目标 IP:port 的 connect() 重定向到本地竞速代理。
 #include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
