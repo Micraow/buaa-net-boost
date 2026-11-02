@@ -162,7 +162,7 @@ func (r *relay) dispatch(client *net.UDPAddr, data []byte) {
 }
 
 func (r *relay) startFlow(key string, client *net.UDPAddr, first []byte, f *flow) {
-	winner, reply := r.doRace(first)
+	winner, reply, winPort := r.doRace(first)
 	if winner == nil {
 		log.Printf("FAIL %s -> %s", client, r.target)
 		r.removeFlow(key, f)
@@ -193,16 +193,23 @@ func (r *relay) startFlow(key string, client *net.UDPAddr, first []byte, f *flow
 		_, _ = r.listener.WriteToUDP(buf[:n], client)
 	}
 	_ = winner.Close()
+	if winPort > 0 {
+		r.window.ReleasePort(winPort)
+	}
 	r.removeFlow(key, f)
 }
 
-func (r *relay) doRace(first []byte) (*net.UDPConn, []byte) {
+func (r *relay) doRace(first []byte) (*net.UDPConn, []byte, int) {
 	for round := 1; round <= r.rounds; round++ {
-		base := r.window.Take()
+		base, ok := r.window.Take()
+		if !ok {
+			break
+		}
 		if r.verbose {
 			log.Printf("[udp] window %d-%d (%d sockets)", base, base+r.n-1, r.n)
 		}
 		conns := make([]*net.UDPConn, 0, r.n)
+		ports := make(map[*net.UDPConn]int)
 		for i := 0; i < r.n; i++ {
 			d := net.Dialer{
 				LocalAddr: &net.UDPAddr{Port: base + i},
@@ -219,6 +226,7 @@ func (r *relay) doRace(first []byte) (*net.UDPConn, []byte) {
 				continue
 			}
 			conns = append(conns, uc)
+			ports[uc] = base + i
 		}
 
 		type ures struct {
@@ -238,10 +246,12 @@ func (r *relay) doRace(first []byte) (*net.UDPConn, []byte) {
 
 		var winner *net.UDPConn
 		var reply []byte
+		winPort := 0
 		for i := 0; i < len(conns); i++ {
 			res := <-ch
 			if res.err == nil && winner == nil {
 				winner, reply = res.conn, res.data
+				winPort = ports[winner]
 				for _, c := range conns {
 					if c != winner {
 						_ = c.Close()
@@ -252,13 +262,21 @@ func (r *relay) doRace(first []byte) (*net.UDPConn, []byte) {
 			}
 		}
 		if winner != nil {
-			if r.verbose {
-				log.Printf("[udp] round %d base=%d winner", round, base)
+			for c, p := range ports {
+				if c != winner {
+					r.window.ReleasePort(p)
+				}
 			}
-			return winner, reply
+			if r.verbose {
+				log.Printf("[udp] round %d base=%d winner=%d", round, base, winPort)
+			}
+			return winner, reply, winPort
+		}
+		for _, p := range ports {
+			r.window.ReleasePort(p)
 		}
 	}
-	return nil, nil
+	return nil, nil, 0
 }
 
 func (r *relay) removeFlow(key string, f *flow) {

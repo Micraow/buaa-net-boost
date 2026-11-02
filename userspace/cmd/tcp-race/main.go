@@ -52,7 +52,7 @@ func main() {
 	flag.IntVar(&end, "end", 32000, "源端口结束（不含）")
 	flag.IntVar(&step, "step", 8, "窗口滚动步长")
 	flag.IntVar(&threads, "threads", 256, "最大并发连接数")
-	flag.DurationVar(&timeout, "timeout", 2500*time.Millisecond, "单轮竞速超时")
+	flag.DurationVar(&timeout, "timeout", 1500*time.Millisecond, "单轮竞速超时")
 	flag.StringVar(&iface, "iface", "", "绑定网卡（默认自动探测默认路由网卡）")
 	flag.BoolVar(&noBind, "no-bind", false, "不绑定网卡")
 	flag.BoolVar(&transparent, "transparent", false, "透明模式：不解析协议，直接转发到 --target")
@@ -112,6 +112,28 @@ func main() {
 	}
 }
 
+func isLocalIP(ipStr string) bool {
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() || ip.IsUnspecified()
+}
+
+func (p *proxy) connect(ip string, port int) (*net.TCPConn, int, time.Duration, int, error) {
+	// 回环/私网/链路本地不走校园出口，竞速没有意义，直接连。
+	if isLocalIP(ip) {
+		d := net.Dialer{Timeout: time.Second}
+		c, err := d.Dial("tcp4", net.JoinHostPort(ip, strconv.Itoa(port)))
+		if err != nil {
+			return nil, 0, 0, 0, err
+		}
+		return c.(*net.TCPConn), 0, 0, 0, nil
+	}
+	return p.racer.Race(context.Background(), ip, port)
+}
+
 func parseTarget(spec string) (string, int, error) {
 	host, portStr, err := net.SplitHostPort(spec)
 	if err != nil {
@@ -148,16 +170,19 @@ func (p *proxy) handle(c net.Conn) {
 	var upstream *net.TCPConn
 	defer func() {
 		if upstream != nil {
-			_ = upstream.Close()
+			race.CloseRST(upstream)
 		}
 		_ = client.Close()
 	}()
 
 	if p.transparent {
-		up, lport, dt, round, err := p.racer.Race(context.Background(), p.targetIP, p.targetPort)
+		up, lport, dt, round, err := p.connect(p.targetIP, p.targetPort)
 		if err != nil {
 			log.Printf("[transparent] FAIL -> %s:%d: %v", p.targetIP, p.targetPort, err)
 			return
+		}
+		if lport > 0 {
+			defer p.racer.ReleasePort(lport)
 		}
 		log.Printf("[transparent] OK -> %s:%d winner=%d round=%d t=%s",
 			p.targetIP, p.targetPort, lport, round, dt.Round(time.Millisecond))
@@ -200,7 +225,7 @@ func (p *proxy) handle(c net.Conn) {
 		return
 	}
 
-	up, lport, dt, round, err := p.racer.Race(context.Background(), ip, port)
+	up, lport, dt, round, err := p.connect(ip, port)
 	if err != nil {
 		log.Printf("FAIL %s->%s:%d n=%d rounds=%d t=%s: %v",
 			host, ip, port, p.n, p.rounds, dt.Round(time.Millisecond), err)
@@ -212,6 +237,9 @@ func (p *proxy) handle(c net.Conn) {
 		return
 	}
 	upstream = up
+	if lport > 0 {
+		defer p.racer.ReleasePort(lport)
+	}
 
 	log.Printf("OK   %s->%s:%d winner=%d round=%d t=%s", host, ip, port, lport, round, dt.Round(time.Millisecond))
 	if socks {

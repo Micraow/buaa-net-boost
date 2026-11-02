@@ -76,6 +76,7 @@ func main() {
 		times = append(times, dt)
 		winners = append(winners, lport)
 		race.CloseRST(c)
+		r.ReleasePort(lport)
 	}
 	sort.Slice(times, func(i, j int) bool { return times[i] < times[j] })
 	median := time.Duration(0)

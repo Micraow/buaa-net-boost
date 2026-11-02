@@ -4,6 +4,7 @@ package race
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -34,6 +35,7 @@ type Config struct {
 type PortWindow struct {
 	start, end, step, n int
 	cur                 int
+	used                map[int]bool
 	mu                  sync.Mutex
 }
 
@@ -50,29 +52,59 @@ func NewPortWindow(start, end, step, n int) (*PortWindow, error) {
 	if start+n > end {
 		return nil, fmt.Errorf("base + n 超过 end")
 	}
-	return &PortWindow{start: start, end: end, step: step, n: n, cur: start}, nil
+	return &PortWindow{start: start, end: end, step: step, n: n, cur: start, used: map[int]bool{}}, nil
 }
 
-func (w *PortWindow) Take() int {
+// Take 返回一个所有端口都未被占用的窗口；调用方必须对每个端口 ReleasePort。
+func (w *PortWindow) Take() (int, bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	base := w.cur
-	w.cur += w.step
-	if w.cur+w.n > w.end {
-		w.cur = w.start
+	span := w.end - w.start
+	if span < w.n {
+		return 0, false
 	}
-	return base
+	for tries := 0; tries < span; tries++ {
+		base := w.cur
+		w.cur += w.step
+		if w.cur+w.n > w.end {
+			w.cur = w.start
+		}
+		if base+w.n > w.end {
+			continue
+		}
+		free := true
+		for i := 0; i < w.n; i++ {
+			if w.used[base+i] {
+				free = false
+				break
+			}
+		}
+		if !free {
+			continue
+		}
+		for i := 0; i < w.n; i++ {
+			w.used[base+i] = true
+		}
+		return base, true
+	}
+	return 0, false
+}
+
+func (w *PortWindow) ReleasePort(port int) {
+	w.mu.Lock()
+	delete(w.used, port)
+	w.mu.Unlock()
 }
 
 // BindControl returns a Dialer.Control that binds the socket to iface.
 func BindControl(iface string) func(network, address string, c syscall.RawConn) error {
 	return func(network, address string, c syscall.RawConn) error {
-		if iface == "" {
-			return nil
-		}
 		var serr error
 		if err := c.Control(func(fd uintptr) {
-			serr = syscall.SetsockoptString(int(fd), syscall.SOL_SOCKET, soBindToDevice, iface)
+			_ = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+			if iface != "" {
+				serr = syscall.SetsockoptString(int(fd), syscall.SOL_SOCKET, soBindToDevice, iface)
+			}
 		}); err != nil {
 			return err
 		}
@@ -207,10 +239,17 @@ func (r *Racer) attempt(ctx context.Context, ip string, port, base int) (*net.TC
 			if r.cfg.Verbose {
 				r.log("[syn] port %d also established, closing", res.lport)
 			}
-			res.conn.Close()
+			CloseRST(res.conn)
 		}
 	}
 	wg.Wait()
+
+	for i := 0; i < r.cfg.N; i++ {
+		p := base + i
+		if p != wport {
+			r.win.ReleasePort(p)
+		}
+	}
 
 	if winner != nil {
 		return winner, wport, time.Since(start), nil
@@ -226,9 +265,25 @@ func (r *Racer) Race(ctx context.Context, ip string, port int) (*net.TCPConn, in
 	var total time.Duration
 	var lastErr error
 	for round := 1; round <= r.cfg.Rounds; round++ {
-		base := r.win.Take()
-		c, lport, dt, err := r.attempt(ctx, ip, port, base)
-		total += dt
+		var c *net.TCPConn
+		var lport int
+		var dt time.Duration
+		var err error
+		var base int
+		for bindTry := 0; bindTry < 3; bindTry++ {
+			var ok bool
+			base, ok = r.win.Take()
+			if !ok {
+				lastErr = fmt.Errorf("没有空闲源端口")
+				break
+			}
+			c, lport, dt, err = r.attempt(ctx, ip, port, base)
+			total += dt
+			if c != nil || !errors.Is(err, syscall.EADDRINUSE) {
+				break
+			}
+			r.log("[race] base=%d 端口被占用，换窗口重试", base)
+		}
 		if r.cfg.Verbose {
 			r.log("[race] round %d base=%d total=%s", round, base, total.Round(time.Millisecond))
 		}
@@ -241,6 +296,13 @@ func (r *Racer) Race(ctx context.Context, ip string, port int) (*net.TCPConn, in
 		lastErr = fmt.Errorf("竞速失败")
 	}
 	return nil, 0, total, r.cfg.Rounds, lastErr
+}
+
+// ReleasePort releases a winner port once its connection is closed.
+func (r *Racer) ReleasePort(port int) {
+	if port > 0 {
+		r.win.ReleasePort(port)
+	}
 }
 
 // CloseRST closes with RST instead of FIN.
