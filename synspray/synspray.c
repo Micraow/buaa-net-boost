@@ -103,6 +103,12 @@ int main(int argc, char **argv)
 
     int fd = socket(AF_INET6, SOCK_STREAM, 0);
     if (fd < 0) { perror("socket tcp"); return 1; }
+    int one = 1;
+    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) != 0)
+        perror("SO_REUSEADDR");
+    struct linger lg = { .l_onoff = 1, .l_linger = 0 };
+    if (setsockopt(fd, SOL_SOCKET, SO_LINGER, &lg, sizeof(lg)) != 0)
+        perror("SO_LINGER");
     if (setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, iface,
                    (socklen_t)(strlen(iface) + 1)) != 0)
         perror("SO_BINDTODEVICE tcp");
@@ -113,6 +119,9 @@ int main(int argc, char **argv)
     if (bind(fd, (struct sockaddr *)&local, sizeof(local)) != 0) {
         perror("bind local port"); return 1;
     }
+    socklen_t local_len = sizeof(local);
+    if (getsockname(fd, (struct sockaddr *)&local, &local_len) == 0)
+        lport = ntohs(local.sin6_port);   // lport=0 时由内核分配，抓包过滤要用实际端口
     fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
 
     int pf = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
@@ -179,31 +188,50 @@ int main(int argc, char **argv)
     struct sockaddr_in6 rawdst = dst;
     rawdst.sin6_port = 0;
 
+    int ok = 0;
+    int last_err = 0;
     int sent = 0;
-    for (int i = 0; i < copies; i++) {
+    double dt = 0;
+    for (int i = 0; i < copies && !ok && !last_err; i++) {
         if (sendto(raw, syn, synlen, 0,
                    (struct sockaddr *)&rawdst, sizeof(rawdst)) < 0)
             perror("sendto raw");
         else
             sent++;
-        if (i + 1 < copies)
-            usleep((useconds_t)interval * 1000);
+        // 发完一份就 poll，成功立即停止，避免把“发完所有份”的时间当成握手时间。
+        double until = now_ms() + (i + 1 < copies ? interval : 0);
+        while (now_ms() < until && !ok && !last_err) {
+            struct pollfd p = { .fd = fd, .events = POLLOUT };
+            if (poll(&p, 1, 5) > 0) {
+                int err = 0;
+                socklen_t el = sizeof(err);
+                getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &el);
+                dt = now_ms() - t0;
+                if (err == 0)
+                    ok = 1;
+                else
+                    last_err = err;
+            }
+        }
     }
-
-    int ok = 0;
-    double dt = 0;
-    while (now_ms() - t0 < timeout) {
+    while (!ok && !last_err && now_ms() - t0 < timeout) {
         struct pollfd p = { .fd = fd, .events = POLLOUT };
         if (poll(&p, 1, 20) > 0) {
             int err = 0;
             socklen_t el = sizeof(err);
             getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &el);
             dt = now_ms() - t0;
-            if (err == 0) { ok = 1; break; }
+            if (err == 0)
+                ok = 1;
+            else
+                last_err = err;
             break;
         }
     }
-    printf("ok=%d time=%.1fms copies=%d sent=%d synlen=%zu\n", ok, dt, copies, sent, synlen);
+    if (dt == 0)
+        dt = now_ms() - t0;
+    printf("ok=%d time=%.1fms copies=%d sent=%d synlen=%zu err=%d\n",
+           ok, dt, copies, sent, synlen, last_err);
     close(fd); close(pf); close(raw);
     return ok ? 0 : 1;
 }
