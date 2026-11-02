@@ -2,7 +2,7 @@
 
 把指定目标 `IP:port` 的 `connect()` 在 cgroup 层改写到本地竞速代理；代理做多源端口 SYN 竞速，胜者承载应用数据。
 
-**范围**：本目录的 eBPF 程序只处理 IPv4；IPv6 请用 userspace 的 （不需要 eBPF）。
+**范围**：本目录的 eBPF 程序只处理 IPv4；IPv6 请用 userspace 的 `--family 6`（不需要 eBPF）。
 
 **为什么竞速不放在 eBPF**：`connect()` 只接受一个 5 元组，eBPF 无法替应用保留多个候选连接并选一个返回。eBPF 只负责“把流量送到竞速器”，竞速必须在用户态。
 

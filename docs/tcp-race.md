@@ -90,7 +90,7 @@ curl --socks5-hostname 127.0.0.1:18080 -k \
 
 实测：HTTP CONNECT 10/10；SOCKS5 经域名下载 1 MB 返回 `206`、`size=1000001`。
 
-代理内的 `resolve()` 用 UDP DNS（`223.5.5.5`，绑定 wlan0）解析域名；换环境时按需修改。若需要 IPv6，需另加 `AF_INET6` 分支。
+代理内的 `resolve()` 用系统解析器。IPv6 用 `--family 6`；由于 v6 首包丢失是逐流随机，建议 `--n 8 --timeout 3s`。
 
 ## 注意事项
 
