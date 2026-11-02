@@ -474,6 +474,13 @@ func tunnel(client *net.TCPConn, br *bufio.Reader, upstream *net.TCPConn) {
 	_ = upstream.SetDeadline(time.Time{})
 	_ = client.SetNoDelay(true)
 	_ = upstream.SetNoDelay(true)
+	// 大 BDP/上传方向给内核更多窗口；SetReadBuffer/SetWriteBuffer 会关闭该 socket 的自动调优，
+	// 4MB 对当前 6–15 MB/s 链路足够，内存代价很小。
+	const buf = 4 << 20
+	_ = client.SetReadBuffer(buf)
+	_ = client.SetWriteBuffer(buf)
+	_ = upstream.SetReadBuffer(buf)
+	_ = upstream.SetWriteBuffer(buf)
 
 	// 把 CONNECT/SOCKS5 之后已缓冲的应用字节先送出去，再走 splice 快路径。
 	if n := br.Buffered(); n > 0 {

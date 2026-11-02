@@ -82,7 +82,8 @@ curl -x http://127.0.0.1:18080 https://目标/
 | 项目 | 代理 | 直连 |
 |---|---|---|
 | TCP 小请求 | 20/20，中位 89ms | 19/20，中位 1.08s，1 次 12s 超时 |
-| 100MB 下载 | 6.1 / 13.8 MB/s；CPU 1–2% | 5.2 / 7.1 MB/s；connect 5.23s |
+| 100MB 下载（3 轮） | 17.52 MB/s；CPU ~2% | 17.61 MB/s |
+| 100MB 上传（3 轮） | 14.90 MB/s；CPU ~0.1% | 15.86 MB/s |
 | UDP DNS | 50/50，中位 65.7ms | 单包 15/50 |
 
 代理 CPU 在 100MB 传输中 0.15–0.18s，helper 0.00–0.01s；额外包量约 16 个
@@ -93,9 +94,10 @@ connect 长尾，不是物理带宽。完整方法和开销见
 [`docs/benchmark.md`](docs/benchmark.md)。
 
 浏览器实测（Chrome，2 轮）：DeepSeek LCP 1700→516ms，Comate 582→340ms，
-USTC/百度/Bing 基本持平；100MB 上传 15.1→11.1 MB/s，CPU 接近 0。DeepSeek
-的卡顿根因是 AAAA 在 UDP 53 被过滤（DoH 正常），代理的并发 A/AAAA + 缓存
-把它消掉；QUIC/Hysteria2、上传、IPv4 多路径的结论见
+USTC/百度/Bing 基本持平；100MB 3 轮下载 17.61→17.52 MB/s（0.5%），上传
+15.86→14.90 MB/s（6%，一次代理 16.37 高于直连）。DeepSeek 的卡顿根因是
+AAAA 在 UDP 53 被过滤（DoH 正常），代理的并发 A/AAAA + 缓存把它消掉；
+QUIC/Hysteria2、上传、IPv4 多路径的结论见
 [`docs/browser-benchmark.md`](docs/browser-benchmark.md)。
 
 ## 核心结论

@@ -406,7 +406,7 @@ func ResolveFast(ctx context.Context, host string, family int) (string, error) {
 	}
 	ch := make(chan result, 2)
 	go func() {
-		c, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		c, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
 		defer cancel()
 		ips, err := net.DefaultResolver.LookupNetIP(c, "ip6", host)
 		for _, ip := range ips {
@@ -430,7 +430,7 @@ func ResolveFast(ctx context.Context, host string, family int) (string, error) {
 
 	var v4 *result
 	var lastErr error
-	grace := time.NewTimer(150 * time.Millisecond)
+	grace := time.NewTimer(25 * time.Millisecond)
 	defer grace.Stop()
 	for i := 0; i < 2; i++ {
 		select {

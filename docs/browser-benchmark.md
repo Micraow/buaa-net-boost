@@ -33,19 +33,20 @@ context，记录 Navigation Timing、LCP、TTFB、wall。样本小，只代表�
 本机没有微信客户端，所以直连 `CONNECTION_REFUSED`、代理
 `TUNNEL_CONNECTION_FAILED`；这不是代理缺陷，页面主体正常加载。
 
-## 2. 上传带宽
+## 2. 上传和下载（3 轮，100MB，同一目标 IP）
 
-Cloudflare `__up`，100MB，IPv6：
+Cloudflare `__up`（上传）和 TUNA ISO Range（下载），IPv6：
 
-| 方式 | 吞吐 | 总时间 | 代理 CPU | RSS |
+| 方向 | 直连中位 | 代理中位 | 损失 | 代理 CPU |
 |---|---:|---:|---:|---:|
-| 直连 | 15.1 MB/s | 6.95s | — | — |
-| 代理 | 11.1 MB/s | 9.43s | ≈0（<10ms ticks） | 17.46MB → 17.47MB |
+| 下载 | 17.61 MB/s | 17.52 MB/s | 0.5% | 2.0–2.4% |
+| 上传 | 15.86 MB/s | 14.90 MB/s | 6.0% | 0.1–0.2% |
 
-上传方向代理慢约 26%；CPU 仍然接近 0，helper 0.01s。这说明上传不是 CPU
-瓶颈，而是多了一跳用户态代理/两个 TCP socket 的传输路径；单次测量，网络
-波动也会贡献一部分。下载方向此前没有出现明显回退，但上传需要更多轮次才能
-给稳定结论。代理的 `io.Copy` 仍是 `splice`。
+上传/下载代理 RSS 只增加 4–40KB；helper 0.00–0.01s。此前单次上传 15.1→11.1
+MB/s（26%）是坏样本；3 轮里代理有一次 16.37 MB/s，高于直连 15.29。代理的
+`io.Copy` 仍是 `splice`，tunnel 两端 socket 设了 4MB 收发缓冲。结论：下载
+基本无损；上传有约 6% 的波动级损失，不是 CPU 瓶颈，主要是多一跳代理/两个
+TCP socket 的路径，单次测量不能下结论。
 
 ## 3. `chat.deepseek.com` 为什么有时卡：AAAA
 
@@ -81,14 +82,16 @@ AAAA 上等 6 秒（重试/超时），然后才回退 A，造成“有时秒开
 
 修复：
 
-- 代理已改为 **A/AAAA 并发查询**：AAAA 只等 500ms，A 快时再给 150ms 宽限，
+- 代理已改为 **A/AAAA 并发查询**：AAAA 只等 200ms，A 快时再给 25ms 宽限，
   然后回退 A；DNS 结果缓存 30 秒。DeepSeek 的代理 LCP 从 1700ms 降到
-  516ms。
+  516ms，修短后的 `curl` 总时间约 190ms。
 - 浏览器直连可开 **Chrome Secure DNS / DoH**（腾讯 `doh.pub` 或阿里
   `dns.alidns.com`），绕开 UDP AAAA 过滤；或者使用本代理。
 - 如果继续用系统 UDP DNS，`chat.deepseek.com` 的 AAAA 会周期性超时；
   “秒开”是 AAAA 失败结果被缓存/快速失败的时候，“卡一下”是重新等 AAAA
   超时的时候。
+- 25ms 宽限意味着如果某站 AAAA 返回慢于 25ms，代理会先走 A（可能计费
+  IPv4）；要严格优先 v6，可以调大宽限，或用 DoH 让 AAAA 快速返回。
 
 ## 4. QUIC / Hysteria2 兼容性
 

@@ -46,7 +46,7 @@ userspace/bin/tcp-race \
 - `--n 2`：两条候选 5 元组（不同源端口）并发；
 - `--spray 8`：每条路径 8 份 SYN，20ms 间隔；总共 16 个 SYN，第一条 SYN-ACK 胜出，另一条 RST 关闭；
 - `--timeout 3s`：如果 16 份都没赶上，留给内核 1s/2s 重传兜底；
-- `--family 6`：优先 IPv6；没有 AAAA 或 IPv6 连接失败时回退 IPv4。A/AAAA 并发查询，AAAA 只等 500ms + 150ms 宽限；DNS 结果缓存 30 秒，避免 DeepSeek 这类 AAAA 超时把页面卡 6 秒；
+- `--family 6`：优先 IPv6；没有 AAAA 或 IPv6 连接失败时回退 IPv4。A/AAAA 并发查询，AAAA 只等 200ms + 25ms 宽限；DNS 结果缓存 30 秒，避免 DeepSeek 这类 AAAA 超时把页面卡 6 秒；
 - `--no-bind`：代理本身不绑网卡；如果代理有 `CAP_NET_RAW`，可以去掉，让 TCP socket 也绑 `wlan0`；
 - UDP 默认 `--udp-copies 16 --udp-interval 20ms`，只在每条新流的第一个数据报上连发。
 
@@ -94,13 +94,15 @@ userspace/bin/udp-race --listen 18081 --target 203.107.6.88 --target-port 123 \
 |---|---|
 | TCP 小请求，代理 | 20/20，中位 89ms，最慢 178ms |
 | TCP 小请求，直连 | 19/20，中位总 1.08s，中位 connect 1.035s，1 次 12s 超时 |
-| 100MB 下载，代理 | 6.1 / 13.8 MB/s，总 17.2 / 7.6s |
-| 100MB 下载，直连同 IP | 5.2 / 7.1 MB/s，总 20.1 / 14.8s，connect 5.23s |
+| 100MB 下载，代理（3 轮中位） | 17.52 MB/s |
+| 100MB 下载，直连同 IP（3 轮中位） | 17.61 MB/s（损失 0.5%） |
 | 代理 CPU / RSS | 100MB 用 0.15–0.18s（1–2%），RSS +28–48KB |
 | helper CPU / RSS | 0.00–0.01s，10.9MB RSS，基本不变 |
 | 单条 TCP 流额外包 | 16 个 SYN，约 1.5KB |
 | UDP DNS，代理 | 50/50，中位 65.7ms，最慢 353ms |
 | UDP 代理 CPU / RSS | 50 个新流 0.10s（2%），RSS +8.6MB；每流一个上游 socket |
+| 100MB 上传，代理（3 轮中位） | 14.90 MB/s |
+| 100MB 上传，直连同 IP（3 轮中位） | 15.86 MB/s（损失 6%） |
 
 直连和代理使用同一个目标 IP（`--resolve`）做对比；校园链路本身波动很大，
 吞吐数字只代表这一时段，不代表代理上限。表中 MB/s 是 `size/time_total`，
@@ -125,8 +127,9 @@ Chrome（Playwright headless）每站直连/代理各 2 轮：
 DeepSeek 的卡顿来自 AAAA：UDP 53 对 `chat.deepseek.com` 的 AAAA 被
 Tencent/阿里/校园/114/Google 返回 SERVFAIL 或超时，DoH 走 443 却 53ms 返回
 NODATA；域名本身 AAAA CNAME 目标也没有 AAAA。代理的并发 A/AAAA + 缓存把
-这条长尾消掉。100MB 上传 Cloudflare：直连 15.1 MB/s，代理 11.1 MB/s（慢约
-26%），代理 CPU 仍接近 0。QUIC/Hysteria2、IPv4 多路径和源端口/运营商关系见
+这条长尾消掉；修短后 DeepSeek `curl` 总时间约 190ms。100MB 3 轮中位：下载
+直连 17.61、代理 17.52 MB/s（0.5%）；上传直连 15.86、代理 14.90 MB/s（6%，
+一次代理 16.37 高于直连）。QUIC/Hysteria2、IPv4 多路径和源端口/运营商关系见
 [`../docs/browser-benchmark.md`](../docs/browser-benchmark.md)。
 
 ## IPv6 结论
