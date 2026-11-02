@@ -34,7 +34,7 @@
 
 1. 用户态竞速器：TCP `proxy.py`（HTTP CONNECT + SOCKS5），UDP `udp_race.py`。
 2. 透明接入，按优先级：
-   - **eBPF** `cgroup/connect4` 把 TCP/UDP 改写到本地代理；
+   - **eBPF** `cgroup/connect4` 把 TCP connect 改写到本地代理（UDP 需要 cgroup/sendmsg4 等钩子）；
    - **nftables/iptables REDIRECT**（OUTPUT 链）到本地代理；
    - **TUN/TPROXY** 兜底。
 3. 竞速器内部：端口窗口、胜者保留、失败换窗口重试、流表与空闲回收。

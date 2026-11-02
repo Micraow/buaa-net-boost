@@ -62,15 +62,15 @@ http=206 size=1000001 time=1.26s
 ### 握手竞速基准
 
 ```bash
-python3 ../userspace/probe.py <ip> <port> <N> <trials> [base_port]
+../userspace/bin/probe --n <N> --trials <trials> --base <base> <ip> <port>
 # 例：
-python3 ../userspace/probe.py 223.5.5.5 443 5 12 55003
+../userspace/bin/probe --n 5 --trials 12 --base 20003 223.5.5.5 443
 ```
 
 ### 竞速代理（HTTP CONNECT + SOCKS5 CONNECT）
 
 ```bash
-python3 ../userspace/proxy.py --listen 18080 --n 5 --rounds 2 --base 20000 --step 8
+../userspace/bin/tcp-race --listen 18080 --n 5 --rounds 2 --base 20000 --step 8
 
 # HTTP CONNECT
 curl -x http://127.0.0.1:18080 -k https://104.16.132.229/
@@ -84,7 +84,7 @@ curl --socks5-hostname 127.0.0.1:18080 -k \
 
 - 每个新连接在 `[base, end)` 内取一个 N 端口窗口，窗口按 `step=8` 滚动，避免复用同一 5 元组；
 - 竞速失败时自动换下一个窗口重试（`--rounds`）；
-- 胜者和败者都用 `SO_LINGER(1,0)` RST 关闭；
+- 已连接的败者用 RST 关闭；胜者在隧道结束后正常关闭；
 - 隧道空闲 600 s 自动断开；
 - 竞速是并行的，首个成功仍在约 1 个 RTT。
 
@@ -105,7 +105,7 @@ curl --socks5-hostname 127.0.0.1:18080 -k \
 ### 透明模式（配合 eBPF 重定向）
 
 ```bash
-python3 ../userspace/proxy.py --listen 18080 --transparent \
+../userspace/bin/tcp-race --listen 18080 --transparent \
   --target 104.16.132.229:443 --n 5 --rounds 2 --verbose --base 20000
 ```
 

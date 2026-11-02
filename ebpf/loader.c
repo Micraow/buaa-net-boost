@@ -6,15 +6,18 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <signal.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/vfs.h>
 #include <time.h>
 #include <unistd.h>
 
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
 #include <linux/bpf.h>
+#include <linux/magic.h>
 
 static volatile int running = 1;
 
@@ -53,19 +56,34 @@ static void *trace_reader(void *arg)
     return NULL;
 }
 
-static unsigned long long pack(const char *spec)
+static int parse_spec(const char *spec, unsigned long long *out)
 {
     char buf[64];
-    snprintf(buf, sizeof(buf), "%s", spec);
+    if (snprintf(buf, sizeof(buf), "%s", spec) >= (int)sizeof(buf))
+        return -1;
     char *colon = strrchr(buf, ':');
-    if (!colon) {
-        fprintf(stderr, "bad spec: %s (want ip:port)\n", spec);
-        exit(1);
-    }
+    if (!colon)
+        return -1;
     *colon = '\0';
-    unsigned int ip = inet_addr(buf);
-    unsigned int port = (unsigned int)atoi(colon + 1);
-    return ((unsigned long long)ip << 32) | port;
+
+    struct in_addr addr;
+    if (inet_pton(AF_INET, buf, &addr) != 1)
+        return -1;
+
+    errno = 0;
+    char *end = NULL;
+    unsigned long port = strtoul(colon + 1, &end, 10);
+    if (errno || !end || *end || port < 1 || port > 65535)
+        return -1;
+
+    *out = ((unsigned long long)addr.s_addr << 32) | (port & 0xffff);
+    return 0;
+}
+
+static int print_fn(enum libbpf_print_level level, const char *fmt, va_list args)
+{
+    (void)level;
+    return vfprintf(stderr, fmt, args);
 }
 
 static int set_map(struct bpf_object *obj, const char *name, unsigned long long val)
@@ -92,9 +110,24 @@ int main(int argc, char **argv)
 
     const char *obj_path = argv[1];
     const char *cgroup = argv[2];
-    unsigned long long target = pack(argv[3]);
-    unsigned long long redirect = pack(argv[4]);
+    unsigned long long target, redirect;
+    if (parse_spec(argv[3], &target) || parse_spec(argv[4], &redirect)) {
+        fprintf(stderr, "bad spec (want ipv4:port): %s / %s\n", argv[3], argv[4]);
+        return 1;
+    }
     int seconds = argc == 6 ? atoi(argv[5]) : 0;
+
+    struct statfs sfs;
+    if (statfs(cgroup, &sfs) != 0) {
+        fprintf(stderr, "statfs %s: %s\n", cgroup, strerror(errno));
+        return 1;
+    }
+    if ((unsigned long)sfs.f_type != (unsigned long)CGROUP2_SUPER_MAGIC) {
+        fprintf(stderr, "%s 不是 cgroup v2 目录\n", cgroup);
+        return 1;
+    }
+
+    libbpf_set_print(print_fn);
 
     struct bpf_object *obj = bpf_object__open_file(obj_path, NULL);
     long err = libbpf_get_error(obj);
@@ -104,27 +137,41 @@ int main(int argc, char **argv)
     }
 
     if (bpf_object__load(obj)) {
-        fprintf(stderr, "load failed\n");
+        fprintf(stderr, "load failed: %s\n", strerror(errno));
+        bpf_object__close(obj);
         return 1;
     }
 
-    if (set_map(obj, "target", target) || set_map(obj, "redirect", redirect))
+    if (set_map(obj, "target", target) || set_map(obj, "redirect", redirect)) {
+        bpf_object__close(obj);
         return 1;
+    }
 
     int cg = open(cgroup, O_RDONLY | O_DIRECTORY);
     if (cg < 0) {
         fprintf(stderr, "open cgroup %s: %s\n", cgroup, strerror(errno));
+        bpf_object__close(obj);
         return 1;
     }
 
+    struct bpf_link *links[8] = {0};
+    int nlinks = 0;
     struct bpf_program *prog;
     bpf_object__for_each_program(prog, obj) {
+        if (nlinks >= 8) {
+            fprintf(stderr, "too many programs\n");
+            break;
+        }
         struct bpf_link *link = bpf_program__attach_cgroup(prog, cg);
         err = libbpf_get_error(link);
         if (err) {
             fprintf(stderr, "attach %s: %s\n", bpf_program__name(prog), strerror(-err));
+            for (int i = 0; i < nlinks; i++)
+                bpf_link__destroy(links[i]);
+            bpf_object__close(obj);
             return 1;
         }
+        links[nlinks++] = link;
         printf("attached %s to %s\n", bpf_program__name(prog), cgroup);
     }
 
@@ -141,6 +188,8 @@ int main(int argc, char **argv)
     while (running && (seconds <= 0 || time(NULL) - start < seconds))
         sleep(1);
 
+    for (int i = 0; i < nlinks; i++)
+        bpf_link__destroy(links[i]);
     fflush(stdout);
     _exit(0);
 }

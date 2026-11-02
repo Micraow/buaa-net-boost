@@ -15,32 +15,40 @@
 
 ## 依赖
 
-- 内核支持 cgroup v2 + `BPF_PROG_TYPE_CGROUP_SOCK_ADDR`；
-- `clang`、`bpftool`、`libbpf` 头文件与库；
-- root（加载 BPF、挂 cgroup）。
+- 内核 ≥ 5.16（`bpf_trace_vprintk`）且支持 cgroup v2 + `BPF_PROG_TYPE_CGROUP_SOCK_ADDR`；
+- `clang`、`libbpf-dev`（≥ 0.6）、`libelf-dev`、`zlib1g-dev`、`gcc`；
+- Go ≥ 1.22（构建用户态竞速代理）；
+- root（加载 BPF、挂 cgroup），但脚本本身应以普通用户运行。
+
+Debian/Ubuntu 安装：
+
+```bash
+sudo apt install clang libbpf-dev libelf-dev zlib1g-dev gcc golang-go
+```
 
 ## 编译
 
 ```bash
 cd ebpf
 make
+make -C ../userspace        # 构建 Go 竞速代理
 ```
 
-产物：`connect_redirect.bpf.o`、`loader`。
+产物：`connect_redirect.bpf.o`、`loader`、`../userspace/bin/tcp-race`。
 
 ## 运行
 
 ```bash
-sudo ./run_test.sh 104.16.132.229:443
+./run_test.sh 104.16.132.229:443
 ```
 
 脚本做的事：
 
-1. 建 `/sys/fs/cgroup/zcode-race`；
-2. 在 root cgroup 里启动透明竞速代理（避免它自己的 connect 被重定向成环）；
-3. 加载 BPF 并挂到 `zcode-race`；
-4. 把 curl 进程放进 `zcode-race`，访问 `https://cloudflare.com/`（`--resolve` 到 `104.16.132.229`）；
-5. 收集 `race-loader.log`、`race-trace.log`、`race-proxy.log`。
+1. 在当前用户 cgroup 下建 `zcode-race` 子 cgroup；
+2. 以普通用户启动透明竞速代理；只把测试客户端放进被挂载的 cgroup，避免代理/mihomo 自己的 connect 被重定向成环；
+3. 用 `sudo` 加载 BPF 并挂到该 cgroup，等待 loader 输出 `ready:`；失败则中止；
+4. 把 curl 进程放进 cgroup，访问 `https://cloudflare.com/`（`--resolve` 到 `104.16.132.229`）；
+5. `trap` 清理代理/loader/cgroup，并收集 `race-loader.log`、`race-trace.log`、`race-proxy.log`。
 
 ## 预期日志
 
@@ -67,7 +75,7 @@ race redirect 104.16.132.229:443 -> 127.0.0.1:18080
 在拿到 root 之前，已用透明代理单独验证“重定向后的目标”这一半：
 
 ```bash
-python3 ../userspace/proxy.py --listen 18080 --transparent --target 104.16.132.229:443 \
+../userspace/bin/tcp-race --listen 18080 --transparent --target 104.16.132.229:443 \
   --n 5 --rounds 2 --verbose --base 20000
 
 # 另一个终端：TLS 客户端直连 127.0.0.1:18080，SNI=cloudflare.com

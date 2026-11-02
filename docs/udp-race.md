@@ -11,7 +11,7 @@
 ## 用法
 
 ```bash
-python3 ../userspace/udp_race.py --listen 18081 \
+../userspace/bin/udp-race --listen 18081 \
   --target 203.107.6.88 --target-port 123 \
   --n 5 --base 20003 --step 8
 ```

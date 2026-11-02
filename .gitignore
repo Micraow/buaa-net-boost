@@ -3,3 +3,4 @@ loader
 __pycache__/
 *.pyc
 race-*.log
+userspace/bin/

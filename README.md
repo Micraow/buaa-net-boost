@@ -17,36 +17,41 @@
 |---|---|
 | `report/ecmp-new-flow-report.md` | 完整调查报告：现象、数据、分析、复现命令 |
 | `ebpf/` | `cgroup/connect4` 透明重定向 + 加载器（需 root） |
-| `userspace/` | TCP 竞速代理、UDP 竞速中继、握手基准脚本 |
+| `userspace/` | Go 版 TCP 竞速代理、UDP 竞速中继、握手基准（`make -C userspace`） |
 | `docs/tcp-race.md` | TCP 竞速代理用法与实测 |
 | `docs/udp-race.md` | UDP 竞速中继用法与实测 |
 | `docs/ebpf-vs-tun.md` | eBPF / TUN / LD_PRELOAD 方案对比 |
 
 ## 快速开始
 
-### 1. 用户态 TCP 竞速代理
+### 1. 用户态 TCP 竞速代理（Go）
 
 ```bash
-python3 userspace/proxy.py --listen 18080 --n 5 --rounds 2 --base 20000 --step 8
+make -C userspace
+userspace/bin/tcp-race --listen 18080 --n 5 --rounds 2 --base 20000 --step 8
+# 可选：--iface wlp8s0 / --no-bind / --timeout 2.5s / --verbose
+
 curl -x http://127.0.0.1:18080 -k https://目标/
 curl --socks5-hostname 127.0.0.1:18080 -k https://目标/
 ```
 
-### 2. UDP 竞速中继
+### 2. UDP 竞速中继（Go）
 
 ```bash
-python3 userspace/udp_race.py --listen 18081 \
+userspace/bin/udp-race --listen 18081 \
   --target 203.107.6.88 --target-port 123 --n 5 --base 20000 --step 8
 ```
 
-### 3. eBPF 透明重定向（需 root）
+### 3. eBPF 透明重定向（需 root，脚本以普通用户运行）
 
 ```bash
 cd ebpf && make
-sudo ./run_test.sh 104.16.132.229:443
+./run_test.sh 104.16.132.229:443
 ```
 
 日志：`ebpf/race-loader.log`、`ebpf/race-trace.log`、`ebpf/race-proxy.log`。
+
+`userspace/README.md` 列出了 Go 实现修复的原型缺陷（假胜者、SOCKS5 提前回成功、CONNECT 余量、半关闭、DNS、网卡硬编码、UDP 缓冲等）。
 
 ## 核心结论
 
