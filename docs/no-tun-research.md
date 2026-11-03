@@ -149,7 +149,7 @@ curl -x http://127.0.0.1:18080 https://目标/
 “不公平”的边界：BBR、并行流、更多 SYN 会抢份额，这在你自己的网络里可以 A/B；
 但不要把它们变成对校园出口/目标服务器的攻击，也不要用来规避计费和审计。
 
-## 8. 150Mbps AC 限速实验（NIC 按请求设置）
+## 8. 150Mbps 档位限速实验（NIC 授权）
 
 目标：判断限速是 per-flow 还是 per-client/AC，以及 DSCP/并行/协议能否超过。
 
@@ -173,8 +173,8 @@ curl -x http://127.0.0.1:18080 https://目标/
   DSCP 或不做优先队列。
 - 上传方向同样没有聚合增益（4 流 12.46 MB/s）。
 - 正确测 QUIC 需要一个返回大文件且支持 HTTP/3 的目标；Cloudflare `__down` 返回 403，
-  不能拿它下结论。但限速发生在 AC/STA 聚合层时，QUIC 也大概率同样受限。
-- 要通过客户端协议“超过 per-station 聚合限速”，只能换 station/账号/AC 策略，或者
+  不能拿它下结论。但限速发生在 AP/STA 聚合层时，QUIC 也大概率同样受限。
+- 要通过客户端协议“超过 per-station 聚合限速”，只能换 station/账号/网络策略，或者
   伪造 MAC/IP；后者是规避/滥用，不做。合法路径是让 NIC 调整 AC 限速策略。
 - 客户端软件仍能改善 **延迟/连接成功率/体验**（DNS、SYN 复读、预热、TCP 参数），
   但不能提高这条 150Mbps 的聚合上限；单流 18.5 MB/s 已经接近该上限。
@@ -241,7 +241,7 @@ curl -x http://127.0.0.1:18080 https://目标/
   不能证明 token bucket 无 burst，但至少没有稳定的“秒级超发”。
 - 手工在 `wlan0` 前缀内加 `2001:250:20f:1:aaaa::1` / `bbbb::1` 后，
   `curl --interface <addr>` 失败；校园没有路由这些任意后缀，不能用这种方法测
-  per-IP 桶。需要 AC 侧确认 key 是 MAC/IP/用户名。
+  per-IP 桶。需要网络侧确认 key 是 MAC/IP/用户名。
 - 同一 TUNA 目标：v4 单流 19.66 MB/s（约 157Mbps，略高于 150），v6 17.21 MB/s；
   v4+v6 并发 19.26 MB/s，不是两者相加。v4 略高于 150 更像限速的计量/开销差异，
   不是第二个独立桶；双栈仍共享同一个 per-client 聚合桶。
@@ -263,7 +263,7 @@ vif/路由/后台进程。
   RouterAlert 4ms 内收到 RST（可能是校园出口或中间盒，未定位）。
   Cloudflare 1.1.1.1:443 接受 NOP/TS，4–5ms 建连。
 - 结论：IP 选项不是通用 bypass，部分上游会静默丢弃；RouterAlert 还会被立即
-  拒绝。能通过的路径上，选项也不改变下行合约。
+  拒绝。能通过的路径上，选项也不改变下行上限。
 
 **IPv4 分片**
 
@@ -295,23 +295,23 @@ vif/路由/后台进程。
   与基线 17.6–18.1 几乎相同。
 - 真实 Cloudflare 双上传（合计 9.2–9.4 MB/s）与 TUNA 下行并发：下行
   14.4–16.1 + 上行 9.2–9.4 = 23.6–25.5 MB/s（189–204Mbps）。
-- 结论：150Mbps 是 **每 station、仅下行** 的合约/整形，不是上下行共享桶，
+- 结论：实测 **每 station、仅下行** 的上限约 150Mbps，不是上下行共享桶，
   也不是纯 PHY 上限（400Mbps PHY 下 100Mbps 上行 + 145Mbps 下行可同时存在）。
-  多流、多目标、多 IP、双栈都共享同一个下行 150Mbps；上行有独立额度。
+  多流、多目标、多 IP、双栈都共享同一个下行 ~150Mbps 上限；上行有独立额度。
 
 **为什么 WMM/DSCP 实验不适用**
 
 - 之前 `SO_PRIORITY=6` 只作用于客户端发出的上行包；下行包的 DSCP 由服务器
-  决定，客户端无法设置。因此 WMM/802.1p/DSCP 无法影响下行合约。
-- 合约在 AP/AC 的 station 层生效，客户端构造的上行 IP 选项/扩展头/分片
+  决定，客户端无法设置。因此 WMM/802.1p/DSCP 无法影响下行上限。
+- 限制在 station/链路层生效，客户端构造的上行 IP 选项/扩展头/分片
   不会改变下行计量；要触发“异形下行包漏计”必须有一个可控的高速下行源，
   当前没有。
 
 **QUIC / 公共 iperf3**
 
 - `curl --http3-only https://cloudflare-quic.com/` 返回 HTTP/3 200，
-  校园没有封 UDP/443；但 Cloudflare 到校园约 12MB/s，低于合约，无法判断
-  UDP/QUIC 是否被合约豁免。
+  校园没有封 UDP/443；但 Cloudflare 到校园约 12MB/s，低于这个上限，无法判断
+  UDP/QUIC 是否被限速豁免。
 - 公共 iperf3：HE 反向 TCP 仅 524kbps、UDP 被拒；Scaleway 忙；国内
   iperf3 端口均未开放。没有找到 >150Mbps 的公共 UDP/QUIC 下行源。
 
@@ -320,12 +320,13 @@ vif/路由/后台进程。
 - 8 次 `curl -6` 到 TUNA，6 次 connect 约 1.0s（首 SYN 丢失后 1s 重传），
   2 次立即建连；一次抓包看到 SYN 在 1s、2s 各重传一次，2.05s 才收到 SYN-ACK。
 - 与之前的结论一致：这是真实的链路行为，tcp-race 的复读/竞速仍有价值；
-  它与 150Mbps 下行合约是两回事。
+  它与下行 ~150Mbps 的实测上限是两回事。
 
 **结论**
 
-- 本地 AC 对 IP 选项、IPv4 分片、IPv6 扩展头都照常转发；过滤发生在上游。
-- 150Mbps 是真实存在的每 station 下行合约，不是 per-flow/per-IP/共享桶。
+- 本地无线侧对 IP 选项、IPv4 分片、IPv6 扩展头都照常转发；过滤发生在上游。
+- 实测约 150Mbps 的每 station 下行上限，不是 per-flow/per-IP/共享桶；
+  它可能是 per-user 合约、空口时间或 TCP 计量，当前未区分。
 - 单个物理射频上，客户端没有找到能稳定超过 150Mbps 下行的协议/包形态漏洞；
   要超过只能换 station 身份（第二个物理射频/第二台设备/不同 role 的 SSID），
   这不是包构造能解决的。
@@ -340,13 +341,13 @@ vif/路由/后台进程。
 - 还支持按应用/类别：`bandwidth-contract app <app> <name> downstream|upstream
   [exclude]`、`bandwidth-contract appcategory <cat> <name> ... [exclude]`；
   Aruba Central 的 API 有 app-bandwidth-contracts、web-category 等对象。
-- 这与实测吻合：`per-user downstream` 的 150Mbps 是每 station 下行合约，
-  上行是另一条独立合约/额度；不是 per-flow、per-IP，也不是上下行共享桶。
+- 这与实测形态一致：`per-user downstream` 的每 station 下行上限约 150Mbps，
+  上行是另一条独立额度；不是 per-flow、per-IP，也不是上下行共享桶。
 - 公开资料里没有找到“绕过 Aruba bandwidth contract”的研究或漏洞；搜索引擎
   被验证码挡住，能查到的只有配置语法、MIB（WLSX-USER-MIB）、Central API
   schema 和固件里的 CLI 语法文件。
 - NIC 已确认没有配置应用排除（app/category exclude），因此“某个应用不受
-  合约约束”这条线不成立；实测 B 站直播也只有 137KB/s（直播码率本身低），
+  限速约束”这条线不成立；实测 B 站直播也只有 137KB/s（直播码率本身低），
   无法用于验证 150Mbps 档位。
 
 **IPv4 选项 / 源路由**
@@ -375,6 +376,6 @@ vif/路由/后台进程。
 - ECN：把 `net.ipv4.tcp_ecn` 设为 1 后，TUNA 并未协商 ECN，下行 IPv6
   Traffic Class 全为 0；没有 ECN 标记可用。
 - MSS：1440→18.18、536→16.47、256→14.32、88→6.90 MB/s。小包只会更慢，
-  说明合约按字节计量，没有“包数/小包”漏洞。
-- 这些字段都不能改变下行 150Mbps 合约；要构造“异形下行包”，需要一个
+  说明限速按字节计量，没有“包数/小包”漏洞。
+- 这些字段都不能改变下行约 150Mbps 的上限；要构造“异形下行包”，需要一个
   可控的高速下行源（自己的 VPS/第二台校园主机），当前没有。
