@@ -23,6 +23,7 @@
 | `docs/ebpf-vs-tun.md` | eBPF / TUN / LD_PRELOAD 方案对比 |
 | `docs/benchmark.md` | 方案一实测：延迟、100MB 带宽、CPU/RSS、额外包量 |
 | `docs/browser-benchmark.md` | 浏览器 LCP/TTFB、上传、DNS AAAA、QUIC/Hysteria2、IPv4 多路径 |
+| `docs/no-tun-research.md` | 不开 TUN 的协议层研究：KCP/用户态 TCP/QUIC/DSCP/连接池/并行流 |
 | `synspray/` | 同 5 元组 SYN 复读的独立验证工具与测量数据 |
 
 ## 快速开始
