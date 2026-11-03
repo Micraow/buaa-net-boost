@@ -220,3 +220,16 @@ curl -x http://127.0.0.1:18080 https://目标/
   单流 4.38 MB/s 接近 2.4GHz PHY 上限；5GHz 主链路的 150Mbps 上限不变。
 - 要真正叠加，需要第二个物理射频（USB Wi-Fi）或另一个 AP/频段，而不是同一个
   Intel 射频上的 vif；vif 的设计是并发角色（STA+AP/P2P/两个 STA），不是多射频。
+
+### 两个不同 5GHz AP 的实验（已还原）
+
+- `wlan0`: BUAA-WiFi，5745MHz（AP BSSID ...92）；`wlan0b`: BUAA-Mobile，5765MHz
+  （另一个 AP，BSSID ...53）。
+- 关联后 `wlan0` 的 TX 384/108Mbps、`wlan0b` 216/26Mbps；单射频为两个 vif
+  分时切信道，两个 vif 的 PHY 速率都被压低。
+- 测速：`wlan0` 14.35 MB/s，`wlan0b` 11.54 MB/s，两个并发 **11.98 MB/s**；
+  没有叠加，反而低于单独 `wlan0`。
+- 结论：即使连两个不同的 5GHz AP/信道，一个射频还是不能同时跑满两个 400Mbps
+  PHY；`#channels <= 2` 是分时，不是双射频。400Mbps 是单信道 PHY 速率，不是
+  两个 vif 的合计可用带宽。要叠加必须第二个物理射频（USB Wi-Fi）或第二台设备。
+- 实验后已删除 `wlan0b` 和临时连接，BUAA-WiFi 恢复，TUNA 200。
