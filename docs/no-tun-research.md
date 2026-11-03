@@ -248,3 +248,84 @@ curl -x http://127.0.0.1:18080 https://目标/
 - 结论：并行流、DSCP、vif、双 AP、双栈、多源地址都没有稳定的 2×150。剩余可试的
   是 WMM/802.1p 分类、分片/扩展头漏计、以及第二个物理射频；前两个是找实现 bug，
   不是标准协议能给的稳定增益。
+
+### 异形包实验与限速方向性（Scapy / hping3，已还原）
+
+工具：scapy 2.8.0、hping3 3.0.0-alpha-1、tcpdump。构造包只发往 TEST-NET
+（192.0.2.1 / 2001:db8::1）、公开 DNS 和镜像；单次 1–10s，结束后无残留
+vif/路由/后台进程。
+
+**IPv4 选项**
+
+- 本地网关 10.136.0.1:80 对 NOP、Timestamp、RecordRoute、RouterAlert 四种
+  SYN 全部回 RST（3–12ms）：AC/Wi-Fi 正常转发带 IP 选项的 TCP。
+- 公网 TUNA 101.6.15.130:80：无选项 78ms 建连；NOP/TS/RR 均 3s 超时；
+  RouterAlert 4ms 内收到 RST（可能是校园出口或中间盒，未定位）。
+  Cloudflare 1.1.1.1:443 接受 NOP/TS，4–5ms 建连。
+- 结论：IP 选项不是通用 bypass，部分上游会静默丢弃；RouterAlert 还会被立即
+  拒绝。能通过的路径上，选项也不改变下行合约。
+
+**IPv4 分片**
+
+- 1200B ICMP echo 拆成 4 个 400B 分片，连发 3 轮收到 3 个回复：分片可端到端
+  通过校园路径和 AC。
+- 3000B UDP 被拆成 2×1500B + 1 个小分片；只增加开销，没有看到限速器漏计。
+
+**IPv6 扩展头**
+
+- HBH、Destination Options、Fragment、HBH+DO+Frag 串联，对链路本地网关和
+  网关全局地址各发 5 份：全部 5/5 回复。本地 AP/网关完整转发扩展头。
+- 同样构造对 2001:4860:4860::8888 发 5 份：全部 0/5；对 Cloudflare 的普通
+  ping 本身 100% 丢包，Ali DNS 90% 丢包。扩展头是在 CERNET 之外的上游被过滤，
+  不是 AC 丢的，不能用于公网大流量。
+- Linux 不允许在 TCP socket 上设置 IPV6_DSTOPTS/IPV6_HOPOPTS（EINVAL），
+  只能用于 UDP/raw；UDP 构造的 HBH/DO/Fragment 在 tcpdump 中结构正确。
+
+**限速方向性（关键）**
+
+- 单流 TUNA v6：18.2 MB/s（约 146Mbps）。
+- TUNA + BFSU 两个不同 CERNET 站点并发：总下行 18.08/18.06 MB/s，两流分别
+  8.3+9.8、5.1+13.0；总下行仍停在 145Mbps 左右。
+- TUNA+BFSU+NJU 三站并发：17.51 MB/s（140Mbps）。
+- 窗口 2s/5s/10s/20s：160/148/146/141Mbps。2s 有约 5–10% 的小突发，
+  没有可持续的超发。
+- 上行 100Mbps UDP（1400B，驱动 tx 104–106Mbps）与下行并发：下行仍
+  15.8–17.7 MB/s（126–142Mbps），总吞吐约 240Mbps。
+- 上行 30Mbps（200B 小包，驱动 tx 38–40Mbps）：下行 16.7–17.7 MB/s，
+  与基线 17.6–18.1 几乎相同。
+- 真实 Cloudflare 双上传（合计 9.2–9.4 MB/s）与 TUNA 下行并发：下行
+  14.4–16.1 + 上行 9.2–9.4 = 23.6–25.5 MB/s（189–204Mbps）。
+- 结论：150Mbps 是 **每 station、仅下行** 的合约/整形，不是上下行共享桶，
+  也不是纯 PHY 上限（400Mbps PHY 下 100Mbps 上行 + 145Mbps 下行可同时存在）。
+  多流、多目标、多 IP、双栈都共享同一个下行 150Mbps；上行有独立额度。
+
+**为什么 WMM/DSCP 实验不适用**
+
+- 之前 `SO_PRIORITY=6` 只作用于客户端发出的上行包；下行包的 DSCP 由服务器
+  决定，客户端无法设置。因此 WMM/802.1p/DSCP 无法影响下行合约。
+- 合约在 AP/AC 的 station 层生效，客户端构造的上行 IP 选项/扩展头/分片
+  不会改变下行计量；要触发“异形下行包漏计”必须有一个可控的高速下行源，
+  当前没有。
+
+**QUIC / 公共 iperf3**
+
+- `curl --http3-only https://cloudflare-quic.com/` 返回 HTTP/3 200，
+  校园没有封 UDP/443；但 Cloudflare 到校园约 12MB/s，低于合约，无法判断
+  UDP/QUIC 是否被合约豁免。
+- 公共 iperf3：HE 反向 TCP 仅 524kbps、UDP 被拒；Scaleway 忙；国内
+  iperf3 端口均未开放。没有找到 >150Mbps 的公共 UDP/QUIC 下行源。
+
+**附带确认：IPv6 新流首包丢失仍在**
+
+- 8 次 `curl -6` 到 TUNA，6 次 connect 约 1.0s（首 SYN 丢失后 1s 重传），
+  2 次立即建连；一次抓包看到 SYN 在 1s、2s 各重传一次，2.05s 才收到 SYN-ACK。
+- 与之前的结论一致：这是真实的链路行为，tcp-race 的复读/竞速仍有价值；
+  它与 150Mbps 下行合约是两回事。
+
+**结论**
+
+- 本地 AC 对 IP 选项、IPv4 分片、IPv6 扩展头都照常转发；过滤发生在上游。
+- 150Mbps 是真实存在的每 station 下行合约，不是 per-flow/per-IP/共享桶。
+- 单个物理射频上，客户端没有找到能稳定超过 150Mbps 下行的协议/包形态漏洞；
+  要超过只能换 station 身份（第二个物理射频/第二台设备/不同 role 的 SSID），
+  这不是包构造能解决的。
