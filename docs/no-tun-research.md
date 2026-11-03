@@ -329,3 +329,52 @@ vif/路由/后台进程。
 - 单个物理射频上，客户端没有找到能稳定超过 150Mbps 下行的协议/包形态漏洞；
   要超过只能换 station 身份（第二个物理射频/第二台设备/不同 role 的 SSID），
   这不是包构造能解决的。
+
+### Aruba 合约语义与 IPv4 异常构造（补充）
+
+**Aruba 公开配置语义**
+
+- ArubaOS 的命名合约：`aaa bandwidth-contract <name> kbits <kbps>`；
+  在 `user-role` 下绑定：`bw-contract <name> per-user downstream|upstream`，
+  也支持 `per-apgroup`。
+- 还支持按应用/类别：`bandwidth-contract app <app> <name> downstream|upstream
+  [exclude]`、`bandwidth-contract appcategory <cat> <name> ... [exclude]`；
+  Aruba Central 的 API 有 app-bandwidth-contracts、web-category 等对象。
+- 这与实测吻合：`per-user downstream` 的 150Mbps 是每 station 下行合约，
+  上行是另一条独立合约/额度；不是 per-flow、per-IP，也不是上下行共享桶。
+- 公开资料里没有找到“绕过 Aruba bandwidth contract”的研究或漏洞；搜索引擎
+  被验证码挡住，能查到的只有配置语法、MIB（WLSX-USER-MIB）、Central API
+  schema 和固件里的 CLI 语法文件。
+- NIC 已确认没有配置应用排除（app/category exclude），因此“某个应用不受
+  合约约束”这条线不成立；实测 B 站直播也只有 137KB/s（直播码率本身低），
+  无法用于验证 150Mbps 档位。
+
+**IPv4 选项 / 源路由**
+
+- 本地网关 10.136.0.1 对 NOP、Timestamp、RecordRoute、RouterAlert、
+  实验选项 0x1E、40 字节最大选项、保留标志位 0x8000 的 ICMP echo 都正常
+  回复；带同样选项的 TCP SYN 也回 RST。AC/Wi-Fi 不因选项丢包。
+- LSRR（no-op，路由表就是目的地址）可以端到端到 1.1.1.1 并收到回复；
+  SSRR（type 137）被拒；把 LSRR 路由表设成网关自身、目的仍是 1.1.1.1 时，
+  网关返回 ICMP 3/0（net unreachable）。也就是说源路由不能用来改路。
+- 到公网 TUNA 的 TCP SYN：NOP/TS/RR 3s 超时，RouterAlert 4ms 内 RST；
+  Cloudflare 接受 NOP/TS。IP 选项不是通用 bypass。
+
+**IPv4 分片（修正构造后）**
+
+- 手工分片必须显式设置 `proto=1`，否则 `IP()/Raw()` 会当成 protocol 0，
+  目标不会按 ICMP 处理（这是本轮踩到的构造坑）。
+- 合法 608+600 拆分、8 字节/16 字节首片、乱序（第二片先到）都能被网关
+  重组并回复；32 字节重叠分片被丢弃。即：常规分片可用，重叠分片被防
+  teardrop/重叠攻击的策略挡住。
+- DF+2000B 的 ICMP echo 在抓包里被本机内核拆成 1500+548 两片（raw socket
+  下 DF 没有阻止本机分片），不是路径支持 2000B。
+
+**客户端可控的下行字段**
+
+- ECN：把 `net.ipv4.tcp_ecn` 设为 1 后，TUNA 并未协商 ECN，下行 IPv6
+  Traffic Class 全为 0；没有 ECN 标记可用。
+- MSS：1440→18.18、536→16.47、256→14.32、88→6.90 MB/s。小包只会更慢，
+  说明合约按字节计量，没有“包数/小包”漏洞。
+- 这些字段都不能改变下行 150Mbps 合约；要构造“异形下行包”，需要一个
+  可控的高速下行源（自己的 VPS/第二台校园主机），当前没有。
