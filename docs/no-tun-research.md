@@ -193,3 +193,19 @@ curl -x http://127.0.0.1:18080 https://目标/
   是 per-MAC，第二个 station 的桶也被同一空口/AP 调度限制。要验证是否 per-MAC，需要
   第二个物理射频/有线口/另一个账号，而不是同一个射频上的第二个 vif。
 - 实验后已删除 `wlan0b` 和临时连接，`wlan0`/`BUAA-Mobile` 恢复；TUNA 访问 200。
+
+### 跨 SSID / 跨信道 vif 实验（已还原）
+
+- `wlan0`: BUAA-WiFi，5GHz 5745MHz（BSSID ...92）。
+- `wlan0b`: BUAA-Mobile，先同 5GHz 5745（BSSID ...93），后切 2.4GHz 2437（BSSID ...83）。
+- 认证 MAC 不同，EAP 账号相同；两个接口各自独立 IPv4/IPv6。
+- 同 5GHz/同 AP：wlan0 16.27、wlan0b 11.66、并发 8.93 MB/s。
+- 5GHz WiFi + 2.4GHz Mobile：wlan0 12.08、wlan0b 4.38、并发 10.31 MB/s。
+- 结论：两个 managed vif 共享同一射频/天线/空口；`#channels <=2` 是分时切信道，
+  不是 2 倍空口。跨 SSID/跨信道也没有叠加，反而拖慢 5GHz。per-MAC 桶即使存在，
+  也被单射频的 airtime 限制；要叠加需要第二个物理射频（USB Wi-Fi/有线）或另一台设备，
+  不是同一个射频上的 vif。
+- vif 的用途：在一个物理 WLAN 设备上同时提供多个逻辑接口/角色（STA+AP 热点、
+  STA+P2P、两个 STA、mesh/monitor、网络命名空间/测试），每个 vif 有独立 MAC；
+  它不是第二个射频，不保证带宽叠加。
+- 实验后已删除 `wlan0b` 和临时连接，BUAA-WiFi 恢复，TUNA 200。
