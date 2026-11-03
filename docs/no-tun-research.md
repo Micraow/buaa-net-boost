@@ -178,3 +178,18 @@ curl -x http://127.0.0.1:18080 https://目标/
   伪造 MAC/IP；后者是规避/滥用，不做。合法路径是让 NIC 调整 AC 限速策略。
 - 客户端软件仍能改善 **延迟/连接成功率/体验**（DNS、SYN 复读、预热、TCP 参数），
   但不能提高这条 150Mbps 的聚合上限；单流 18.5 MB/s 已经接近该上限。
+
+### 双 vif / 真实 MAC 实验（已还原）
+
+- Intel Wi-Fi 支持 `managed <= 2`；在 `wlan0` 之外创建 `wlan0b`，用本机有线网卡的
+  真实 MAC（具体地址不记录），克隆同一 `BUAA-Mobile` PEAP 配置；两个接口各自拿到
+  独立 IPv4/IPv6。
+- 认证 MAC 是两个不同的 MAC；EAP 用户名/密码相同。AC 看到的是“不同 MAC、同一账号”；
+  如果按用户限速，两个会话共享；如果按 MAC 限速，第二个 station 有自己的桶。
+- 测速：`wlan0` 单流 16.27 MB/s；`wlan0b` 单流 11.66 MB/s；两个 vif 同时跑
+  100MB 聚合 **8.93 MB/s**。没有叠加，反而互相拖慢——同一射频/同一信道共享空口，
+  两个 managed vif 不是一个独立射频。
+- 结论：在这块单射频硬件上，MAC/vif 不能突破 150Mbps 的 per-client 限速；如果 AC
+  是 per-MAC，第二个 station 的桶也被同一空口/AP 调度限制。要验证是否 per-MAC，需要
+  第二个物理射频/有线口/另一个账号，而不是同一个射频上的第二个 vif。
+- 实验后已删除 `wlan0b` 和临时连接，`wlan0`/`BUAA-Mobile` 恢复；TUNA 访问 200。
